@@ -263,10 +263,9 @@ Aligned with the [HACS publisher requirements](https://www.hacs.xyz/docs/publish
 Toward [default store inclusion](https://www.hacs.xyz/docs/publish/include/):
 
 - [x] README, `hacs.json` (`name`), `manifest.json` keys, brand icon, validation workflow
-- [x] Public GitHub repo shell with description (`iHadAThought/ha-duke-scraper`)
-- [ ] Push `main` + tag `v1.2.0` and publish a GitHub Release
-- [ ] Set GitHub topics (`home-assistant`, `hacs`, `custom-integration`, …) and confirm issues enabled
-- [ ] HACS Action passes with no ignores (after first Actions run on GitHub)
+- [x] Public GitHub repo with description, topics, issues (`iHadAThought/ha-duke-scraper`)
+- [x] GitHub Release `v1.2.0` matching `manifest.json` version
+- [ ] HACS Action passes with no ignores (confirm in Actions after first run)
 - [ ] PR to [`hacs/default`](https://github.com/hacs/default) (optional; custom repo works without this)
 
 HACS only ships `custom_components/` — the worker Docker step is required for all users.
