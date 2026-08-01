@@ -8,9 +8,10 @@ Custom Home Assistant integration that logs into **Duke Energy My Account**, exp
 This repository includes:
 
 1. **`custom_components/duke_scraper/`** — Home Assistant integration (install via HACS or manually)
-2. **`worker/`** — Playwright Chromium HTTP worker (run as a Docker container)
+2. **`duke_scraper_worker/`** — Home Assistant **Supervisor add-on** (Playwright worker)
+3. **`worker/`** — Same worker for Docker Compose / manual `docker run` (non-HAOS)
 
-HACS installs only the custom component. **You must run the worker separately** so HA can call it for login, MFA, and usage exports.
+On **Home Assistant OS**, install the integration with HACS **and** the worker add-on from this repo’s add-on store. HACS cannot start Docker containers by itself.
 
 > **Not affiliated with Duke Energy.** Uses undocumented My Account / mobile CMA API surfaces. Use at your own risk; Duke may change auth or endpoints at any time.
 
@@ -28,8 +29,8 @@ HACS installs only the custom component. **You must run the worker separately** 
 | Piece | Role |
 |---|---|
 | `custom_components/duke_scraper/` | HA config flow, coordinator, Energy statistics |
-| `duke_scraper_worker` container | Playwright on port **8765** (`/health`, `/export`, `/mfa/*`) |
-| Data directory (e.g. `/config/.duke_scraper`) | Tokens, web session, passkey, downloads, `worker_url` |
+| **Duke Energy Scraper Worker** add-on | Playwright on port **8765** (`/health`, `/export`, `/mfa/*`) |
+| Data directory (`/config/.duke_scraper`) | Tokens, web session, passkey, downloads, `worker_url` |
 
 Statistic ID:
 
@@ -37,8 +38,9 @@ Statistic ID:
 
 ## Requirements
 
-- Home Assistant **2024.8+** (OS, Supervised, Container, or Core)
-- **Docker** to run the worker (HAOS already has Docker)
+- Home Assistant **2024.8+**
+- **HAOS / Supervised:** Supervisor add-on (below) **or** a manual Docker worker
+- **Container / Core:** Docker Compose / `docker run` for the worker
 - Network path from Home Assistant → worker (`http://<worker>:8765`)
 - Duke Energy My Account email/password and access to email MFA codes
 
@@ -69,9 +71,19 @@ Restart Home Assistant after copying.
 
 ## Install the worker
 
-Do this **before** (or right after) adding the integration. Pick the section that matches your install.
+Do this **before** (or right after) adding the integration.
 
-### Home Assistant OS (HAOS)
+### Home Assistant OS — Supervisor add-on (recommended)
+
+1. **Settings → Add-ons → Add-on store → ⋮ → Repositories**
+2. Add: `https://github.com/iHadAThought/ha-duke-scraper`
+3. Find **Duke Energy Scraper Worker** → **Install** → **Start** (enable Start on boot)
+4. Wait until the add-on log shows Playwright ready / listening on `8765` (first build can take several minutes)
+5. The add-on writes `/config/.duke_scraper/worker_url` automatically — leave **Worker URL** blank in the integration, or paste the URL from that file
+
+Supported architectures: **amd64**, **aarch64**.
+
+### Home Assistant OS — manual Docker (alternative)
 
 You need a shell on the HA host (Advanced SSH / Terminal add-on with protection mode off, or console access).
 

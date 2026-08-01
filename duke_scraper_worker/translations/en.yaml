@@ -1,0 +1,6 @@
+configuration:
+  timezone:
+    name: Time zone
+    description: IANA time zone for Duke usage timestamps (often America/New_York).
+network:
+  8765/TCP: Worker HTTP API for the Duke Energy Scraper integration

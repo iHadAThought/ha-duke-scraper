@@ -19,7 +19,7 @@ CONF_UPDATE_MINUTES = "update_minutes"
 
 # Hassio DNS does not resolve manually-started containers; deploy writes
 # /config/.duke_scraper/worker_url with the current hassio-network IP.
-DEFAULT_WORKER_URL = "http://172.30.33.4:8765"
+DEFAULT_WORKER_URL = "http://local-duke-scraper-worker:8765"
 WORKER_URL_FILE = "worker_url"
 DEFAULT_METER_SERIAL = "325385805"
 

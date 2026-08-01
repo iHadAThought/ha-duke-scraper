@@ -1,0 +1,29 @@
+name: Duke Energy Scraper Worker
+version: "1.4.0"
+slug: duke_scraper_worker
+description: >-
+  Playwright worker for the Duke Energy Scraper Home Assistant integration.
+  Handles login, MFA, passkeys, and Green Button / CMA usage exports on port 8765.
+url: https://github.com/iHadAThought/ha-duke-scraper
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+homeassistant: "2024.8.0"
+hassio_api: true
+hassio_role: default
+apparmor: false
+map:
+  - type: homeassistant_config
+    read_only: false
+ports:
+  8765/tcp: 8765
+ports_description:
+  8765/tcp: Worker HTTP API (/health, /export, /mfa/*)
+watchdog: tcp://[HOST]:[PORT:8765]
+options:
+  timezone: America/New_York
+schema:
+  timezone: str
