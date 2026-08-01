@@ -263,8 +263,9 @@ Aligned with the [HACS publisher requirements](https://www.hacs.xyz/docs/publish
 Toward [default store inclusion](https://www.hacs.xyz/docs/publish/include/):
 
 - [x] README, `hacs.json` (`name`), `manifest.json` keys, brand icon, validation workflow
-- [x] Public GitHub repo with description, topics, issues enabled
-- [x] GitHub Release matching `manifest.json` `version` (e.g. `v1.2.0`)
+- [x] Public GitHub repo shell with description (`iHadAThought/ha-duke-scraper`)
+- [ ] Push `main` + tag `v1.2.0` and publish a GitHub Release
+- [ ] Set GitHub topics (`home-assistant`, `hacs`, `custom-integration`, …) and confirm issues enabled
 - [ ] HACS Action passes with no ignores (after first Actions run on GitHub)
 - [ ] PR to [`hacs/default`](https://github.com/hacs/default) (optional; custom repo works without this)
 
