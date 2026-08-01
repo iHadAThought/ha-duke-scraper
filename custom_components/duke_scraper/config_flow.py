@@ -19,7 +19,6 @@ from .const import (
     BACKFILL_DAY_CHOICES,
     CONF_BACKFILL_DAYS,
     CONF_EMAIL,
-    CONF_FETCH_BILLING,
     CONF_INTERVAL,
     CONF_METER_SERIAL,
     CONF_MFA_CODE,
@@ -29,7 +28,6 @@ from .const import (
     CONF_WORKER_URL,
     DATA_DIR_NAME,
     DEFAULT_BACKFILL_DAYS,
-    DEFAULT_FETCH_BILLING,
     DEFAULT_INTERVAL,
     DEFAULT_METER_SERIAL,
     DEFAULT_UPDATE_MINUTES,
@@ -204,9 +202,6 @@ def _preferences_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
-            vol.Required(
-                CONF_FETCH_BILLING, default=bool(d[CONF_FETCH_BILLING])
-            ): bool,
         }
     )
 
@@ -232,9 +227,6 @@ def _normalize_preferences(user_input: dict[str, Any]) -> dict[str, Any]:
         CONF_BACKFILL_DAYS: backfill,
         CONF_INTERVAL: interval,
         CONF_UPDATE_MINUTES: int(minutes),
-        CONF_FETCH_BILLING: bool(
-            user_input.get(CONF_FETCH_BILLING, DEFAULT_FETCH_BILLING)
-        ),
     }
 
 

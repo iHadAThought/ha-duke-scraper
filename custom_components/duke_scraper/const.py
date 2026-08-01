@@ -16,7 +16,6 @@ CONF_USE_PASSKEY = "use_passkey"
 CONF_BACKFILL_DAYS = "backfill_days"
 CONF_INTERVAL = "interval"
 CONF_UPDATE_MINUTES = "update_minutes"
-CONF_FETCH_BILLING = "fetch_billing"
 
 # Hassio DNS does not resolve manually-started containers; deploy writes
 # /config/.duke_scraper/worker_url with the current hassio-network IP.
@@ -33,7 +32,6 @@ DEFAULT_USE_PASSKEY = True
 DEFAULT_BACKFILL_DAYS = "max"
 DEFAULT_INTERVAL = "fifteen_minute"
 DEFAULT_UPDATE_MINUTES = 120
-DEFAULT_FETCH_BILLING = True
 LOOKBACK_DAYS = 7
 
 BACKFILL_DAY_CHOICES: dict[str, str] = {
@@ -68,16 +66,6 @@ BACKFILL_DONE_KEY = "backfill_done"
 WEB_MFA_OK_KEY = "web_mfa_ok"
 NOTIFICATION_MFA_ID = "duke_scraper_mfa_required"
 
-# Billing cache keys mirrored from worker /billing
-BILLING_ATTR_RATE = "energy_rate_usd_per_kwh"
-BILLING_ATTR_CURRENT = "current_bill_usd"
-BILLING_ATTR_ESTIMATED = "estimated_bill_usd"
-BILLING_ATTR_DUE = "bill_due_date"
-BILLING_ATTR_STATUS = "billing_status"
-BILLING_ATTR_PAST_DUE = "past_due"
-BILLING_ATTR_MESSAGE = "billing_message"
-BILLING_ATTR_FETCHED = "fetched_at"
-
 
 def default_options() -> dict:
     """Default entry.options for new and migrated installs."""
@@ -86,7 +74,6 @@ def default_options() -> dict:
         CONF_BACKFILL_DAYS: DEFAULT_BACKFILL_DAYS,
         CONF_INTERVAL: DEFAULT_INTERVAL,
         CONF_UPDATE_MINUTES: DEFAULT_UPDATE_MINUTES,
-        CONF_FETCH_BILLING: DEFAULT_FETCH_BILLING,
     }
 
 

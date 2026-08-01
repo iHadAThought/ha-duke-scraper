@@ -35,7 +35,6 @@ from .const import (
     BACKFILL_START_YEAR,
     CONF_BACKFILL_DAYS,
     CONF_EMAIL,
-    CONF_FETCH_BILLING,
     CONF_INTERVAL,
     CONF_METER_SERIAL,
     CONF_PASSWORD,
@@ -44,7 +43,6 @@ from .const import (
     CONF_WORKER_URL,
     DATA_DIR_NAME,
     DEFAULT_BACKFILL_DAYS,
-    DEFAULT_FETCH_BILLING,
     DEFAULT_INTERVAL,
     DEFAULT_METER_SERIAL,
     DEFAULT_UPDATE_MINUTES,
@@ -86,7 +84,6 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
         self.entry = entry
         self._statistic_ids: set[str] = set()
         self._worker_url_cache: str | None = None
-        self.billing: dict[str, Any] | None = None
 
         @callback
         def _dummy_listener() -> None:
@@ -122,7 +119,7 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
         return url
 
     async def _async_update_data(self) -> dict[str, Any] | None:
-        """Fetch usage (+ optional billing) and insert statistics."""
+        """Fetch usage and insert statistics."""
         try:
             try:
                 usage = await self._async_fetch_usage()
@@ -141,13 +138,7 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
                 )
                 _LOGGER.info("Duke scraper first-run backfill marked complete")
 
-            if option(self.entry, CONF_FETCH_BILLING, DEFAULT_FETCH_BILLING):
-                try:
-                    self.billing = await self._async_fetch_billing()
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("Billing snapshot failed: %s", err)
-
-            return self.billing
+            return {"points": len(usage or {})}
         finally:
             self.update_interval = _update_interval_for(self.entry)
             _LOGGER.info("Next Duke scrape scheduled in %s", self.update_interval)
@@ -253,31 +244,6 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
             result_interval,
         )
         return rows
-
-    async def _async_fetch_billing(self) -> dict[str, Any] | None:
-        """Ask worker for a cached daily billing snapshot."""
-        session = async_get_clientsession(self.hass)
-        use_passkey = bool(option(self.entry, CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY))
-        payload = {
-            "email": self.entry.data[CONF_EMAIL],
-            "password": self.entry.data[CONF_PASSWORD],
-            "use_passkey": use_passkey,
-        }
-        async with session.post(
-            f"{await self._async_worker_url()}/billing",
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=120),
-        ) as resp:
-            body = await resp.json(content_type=None)
-            if resp.status == 401 or body.get("error_code") == "mfa_required":
-                await self._async_handle_mfa_required(
-                    body.get("error") or "Duke web MFA required"
-                )
-                return self.billing
-            if resp.status != 200 or not body.get("ok"):
-                _LOGGER.debug("Billing unavailable: %s", body.get("error"))
-                return body if isinstance(body, dict) else self.billing
-            return body
 
     async def _async_handle_mfa_required(self, detail: str) -> None:
         """Notify user and open reauth so they can request/enter a new MFA code."""

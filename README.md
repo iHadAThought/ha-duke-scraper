@@ -10,7 +10,7 @@ This repository includes:
 1. **`custom_components/duke_scraper/`** — Home Assistant integration (install via HACS or manually)
 2. **`worker/`** — Playwright Chromium HTTP worker (run as a Docker container)
 
-HACS installs only the custom component. **You must run the worker separately** so HA can call it for login, MFA, exports, and billing.
+HACS installs only the custom component. **You must run the worker separately** so HA can call it for login, MFA, and usage exports.
 
 > **Not affiliated with Duke Energy.** Uses undocumented My Account / mobile CMA API surfaces. Use at your own risk; Duke may change auth or endpoints at any time.
 
@@ -21,16 +21,15 @@ HACS installs only the custom component. **You must run the worker separately** 
 - First-run history depth (7 days → max available)
 - Ongoing resolution: **15-minute**, **hourly**, or **daily**
 - Poll schedule: **30 minutes** minimum, default **2 hours**, up to **30 days**
-- Best-effort daily **billing snapshot** (\$/kWh, bill amounts, due date, past-due) when Duke exposes those fields
 - Usage exports are **kWh only** (Green Button + CMA graph do not include \$)
 
 ## Architecture
 
 | Piece | Role |
 |---|---|
-| `custom_components/duke_scraper/` | HA config flow, coordinator, Energy statistics, billing sensors |
-| `duke_scraper_worker` container | Playwright on port **8765** (`/health`, `/export`, `/mfa/*`, `/billing`) |
-| Data directory (e.g. `/config/.duke_scraper`) | Tokens, web session, passkey, billing cache, downloads, `worker_url` |
+| `custom_components/duke_scraper/` | HA config flow, coordinator, Energy statistics |
+| `duke_scraper_worker` container | Playwright on port **8765** (`/health`, `/export`, `/mfa/*`) |
+| Data directory (e.g. `/config/.duke_scraper`) | Tokens, web session, passkey, downloads, `worker_url` |
 
 Statistic ID:
 
@@ -188,7 +187,6 @@ Useful flags: `playwright_ready`, `web_state`, `passkey_enrolled`, `mfa_pending`
    - First export history depth
    - Ongoing data resolution
    - Poll interval (min 30 minutes, default 2 hours)
-   - Fetch billing daily
 6. Complete **MFA** (Request code → enter the email OTP)
 
 Later: **Configure** → Preferences or Credentials / MFA.
@@ -197,7 +195,7 @@ Later: **Configure** → Preferences or Credentials / MFA.
 
 **Settings → Dashboards → Energy → Add consumption** → pick the Duke external statistic as **Grid consumption**.
 
-Usage is kWh-only. If the rate sensor has a value, you can use **Use an entity with current price**; otherwise set a fixed \$/kWh.
+Usage is kWh-only. Set a fixed \$/kWh (or another price entity) in the Energy dashboard if you want cost estimates.
 
 ---
 
@@ -231,23 +229,6 @@ When only one passkey exists, Duke’s UI may hide Remove. Some accounts can rev
 4. Confirm removal in the UI, enroll the **worker** passkey via HA MFA, then re-add a phone passkey if desired
 
 If you prefer not to do that, leave **Use worker passkey** off and complete MFA when HA notifies you (~30-day web session).
-
----
-
-## Billing sensors (best-effort)
-
-When **Fetch billing daily** is on, the worker probes billing pages/APIs **at most once per calendar day** and may create:
-
-| Entity | Meaning |
-|---|---|
-| `sensor.*_energy_rate` | \$/kWh if exposed or derivable |
-| `sensor.*_current_bill` | Amount due / current bill |
-| `sensor.*_estimated_bill` | Estimated / projected bill |
-| `sensor.*_bill_due_date` | Due date |
-| `sensor.*_billing_status` | `ok` / `past_due` / `pending` / `unknown` |
-| `binary_sensor.*_bill_past_due` | Problem flag when late/past-due is detected |
-
-If Duke does not expose these fields, sensors stay unavailable — values are never invented.
 
 ---
 

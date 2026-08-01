@@ -18,8 +18,7 @@
           "use_passkey": "Use worker passkey (recommended)",
           "backfill_days": "First export history depth",
           "interval": "Ongoing data resolution",
-          "update_minutes": "How often to poll",
-          "fetch_billing": "Fetch billing snapshot daily (rate, bill, due date)"
+          "update_minutes": "How often to poll"
         }
       },
       "mfa": {
@@ -71,13 +70,12 @@
       },
       "preferences": {
         "title": "Scraping preferences",
-        "description": "Change passkey, history depth, interval, schedule, and billing.",
+        "description": "Change passkey, history depth, interval, and poll schedule.",
         "data": {
           "use_passkey": "Use worker passkey (recommended)",
           "backfill_days": "First export history depth",
           "interval": "Ongoing data resolution",
-          "update_minutes": "How often to poll",
-          "fetch_billing": "Fetch billing snapshot daily (rate, bill, due date)"
+          "update_minutes": "How often to poll"
         }
       },
       "credentials": {
