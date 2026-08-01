@@ -251,27 +251,6 @@ If Duke does not expose these fields, sensors stay unavailable — values are ne
 
 ---
 
-## HACS status
-
-Aligned with the [HACS publisher requirements](https://www.hacs.xyz/docs/publish/start/) and [integration requirements](https://www.hacs.xyz/docs/publish/integration/).
-
-- Public GitHub: [`iHadAThought/ha-duke-scraper`](https://github.com/iHadAThought/ha-duke-scraper)
-- [HACS my-link](https://my.home-assistant.io/redirect/hacs_repository/?owner=iHadAThought&repository=ha-duke-scraper&category=integration)
-- Structure: `custom_components/duke_scraper/` + root `hacs.json` + `brand/icon.png`
-- CI: [HACS Action](https://www.hacs.xyz/docs/publish/action/) + hassfest (`.github/workflows/validate.yaml`)
-
-Toward [default store inclusion](https://www.hacs.xyz/docs/publish/include/):
-
-- [x] README, `hacs.json` (`name`), `manifest.json` keys, brand icon, validation workflow
-- [x] Public GitHub repo with description, topics, issues (`iHadAThought/ha-duke-scraper`)
-- [x] GitHub Release `v1.2.0` matching `manifest.json` version
-- [ ] HACS Action passes with no ignores (confirm in Actions after first run)
-- [ ] PR to [`hacs/default`](https://github.com/hacs/default) (optional; custom repo works without this)
-
-HACS only ships `custom_components/` — the worker Docker step is required for all users.
-
----
-
 ## Troubleshooting
 
 ### Worker unreachable
