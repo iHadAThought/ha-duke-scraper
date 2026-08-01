@@ -1,0 +1,74 @@
+name: Bug report
+description: Something is broken in the integration, worker, or add-on
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not paste passwords, MFA codes, or full session cookies.**
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Home Assistant integration (custom_components)
+        - Supervisor worker add-on
+        - Manual Docker / Compose worker
+        - Documentation
+        - Other / unsure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Integration / add-on / release tag (e.g. 1.0.1)
+      placeholder: "1.0.1"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2024.12.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact secrets. Worker `/health` JSON (ok) and HA error snippets help.
+      render: shell
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues first
+          required: true
+        - label: I redacted credentials and session material from this report
+          required: true

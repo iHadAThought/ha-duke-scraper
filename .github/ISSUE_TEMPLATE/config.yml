@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Home Assistant Community
+    url: https://community.home-assistant.io/
+    about: General Home Assistant / HACS help that is not specific to this repo.
+  - name: HACS documentation
+    url: https://www.hacs.xyz/
+    about: Questions about installing or using HACS itself.

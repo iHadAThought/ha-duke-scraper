@@ -284,3 +284,5 @@ docker logs -f duke_scraper_worker
 [MIT](LICENSE) — © 2026 Brendan Mahoney.
 
 Not an official Duke Energy or Home Assistant product. Provided as-is.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
