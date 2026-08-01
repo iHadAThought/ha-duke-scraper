@@ -1,5 +1,8 @@
 # Duke Energy Scraper (Home Assistant)
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=iHadAThought&repository=ha-duke-scraper&category=integration)
+
 Custom Home Assistant integration that logs into **Duke Energy My Account**, exports meter usage, and writes it into the Energy dashboard **Grid consumption** statistic.
 
 This repository includes:
@@ -47,8 +50,8 @@ Statistic ID:
 ### Option A — HACS (recommended)
 
 1. Install [HACS](https://www.hacs.xyz/) if needed.
-2. **HACS → Integrations → ⋮ → Custom repositories**
-3. Repository URL: this Git repo · Category: **Integration**
+2. Use the [HACS my-link](https://my.home-assistant.io/redirect/hacs_repository/?owner=iHadAThought&repository=ha-duke-scraper&category=integration), **or** **HACS → Integrations → ⋮ → Custom repositories**
+3. Repository: `https://github.com/iHadAThought/ha-duke-scraper` · Category: **Integration**
 4. Download **Duke Energy Scraper**
 5. **Restart Home Assistant**
 
@@ -250,17 +253,20 @@ If Duke does not expose these fields, sensors stay unavailable — values are ne
 
 ## HACS status
 
-Meant for **HACS** (custom repository first; default store later).
+Aligned with the [HACS publisher requirements](https://www.hacs.xyz/docs/publish/start/) and [integration requirements](https://www.hacs.xyz/docs/publish/integration/).
 
-- [HACS publish docs](https://www.hacs.xyz/docs/publish/start/)
-- [Include as a default repository](https://www.hacs.xyz/docs/publish/include/)
+- Public GitHub: [`iHadAThought/ha-duke-scraper`](https://github.com/iHadAThought/ha-duke-scraper)
+- [HACS my-link](https://my.home-assistant.io/redirect/hacs_repository/?owner=iHadAThought&repository=ha-duke-scraper&category=integration)
+- Structure: `custom_components/duke_scraper/` + root `hacs.json` + `brand/icon.png`
+- CI: [HACS Action](https://www.hacs.xyz/docs/publish/action/) + hassfest (`.github/workflows/validate.yaml`)
 
-Checklist toward default listing:
+Toward [default store inclusion](https://www.hacs.xyz/docs/publish/include/):
 
-- [x] README, `hacs.json`, `manifest.json`, brand icon, validation workflow
-- [ ] Public GitHub repo + Release matching `manifest.json` `version` (e.g. `v1.2.0`)
-- [ ] HACS Action passes with no ignores
-- [ ] PR to [`hacs/default`](https://github.com/hacs/default)
+- [x] README, `hacs.json` (`name`), `manifest.json` keys, brand icon, validation workflow
+- [x] Public GitHub repo with description, topics, issues enabled
+- [x] GitHub Release matching `manifest.json` `version` (e.g. `v1.2.0`)
+- [ ] HACS Action passes with no ignores (after first Actions run on GitHub)
+- [ ] PR to [`hacs/default`](https://github.com/hacs/default) (optional; custom repo works without this)
 
 HACS only ships `custom_components/` — the worker Docker step is required for all users.
 
