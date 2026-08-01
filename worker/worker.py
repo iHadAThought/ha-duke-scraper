@@ -718,7 +718,10 @@ def _capture_authenticator_credential(cdp, authenticator_id: str) -> dict[str, A
 
 def _page_looks_logged_in(page) -> bool:
     url = page.url.lower()
-    if "login" in url or "auth0" in url:
+    # Transitional Auth0 callback — not logged in yet
+    if "login-result" in url or "/authorize" in url or "login.duke-energy.com" in url:
+        return False
+    if "login" in url and "my-account/login" in url:
         return False
     if "dashboard" in url or "my-account" in url:
         try:
@@ -730,6 +733,32 @@ def _page_looks_logged_in(page) -> bool:
     return False
 
 
+def _await_logged_in(page, timeout_ms: int = 45000) -> bool:
+    """Wait through Auth0 login-result / passkey redirects until My Account loads."""
+    import time as _time
+
+    deadline = _time.time() + (timeout_ms / 1000.0)
+    while _time.time() < deadline:
+        url = page.url.lower()
+        if _page_looks_logged_in(page):
+            return True
+        if "login-result" in url or "callback" in url or "login.duke-energy.com" in url:
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                page.wait_for_timeout(1500)
+            continue
+        page.wait_for_timeout(1000)
+
+    # Final nudge: open dashboard with whatever cookies we have
+    try:
+        page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(4000)
+    except Exception:
+        pass
+    return _page_looks_logged_in(page)
+
+
 def _try_click_passkey_continue(page) -> bool:
     for sel in (
         "button:has-text('Continue with Passkey')",
@@ -739,8 +768,10 @@ def _try_click_passkey_continue(page) -> bool:
         try:
             loc = page.locator(sel).first
             if loc.count() and loc.is_visible(timeout=800):
+                LOG.info("Clicking passkey control via %s", sel)
                 loc.click(timeout=8000)
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(3000)
+                _await_logged_in(page, timeout_ms=45000)
                 return True
         except Exception:
             continue
@@ -979,36 +1010,52 @@ def _refresh_web_session(
             page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=90000)
             page.wait_for_timeout(2500)
 
+            # Identifier step first (passkey CTA often appears only after email)
+            try:
+                user = page.locator(
+                    "input#username, input[name='username'], input[type='email']"
+                ).first
+                if user.count() and user.is_visible(timeout=1500):
+                    user.fill(email)
+                    _click_visible_primary(page)
+                    page.wait_for_timeout(2500)
+            except Exception:
+                pass
+
             # Prefer passkey when enabled and we have a worker credential
             if use_passkey and _passkey_enrolled():
                 LOG.info("Attempting Continue with Passkey")
-                if _try_click_passkey_continue(page):
-                    if _page_looks_logged_in(page):
-                        context.storage_state(path=str(WEB_STATE_PATH))
-                        cred = _capture_authenticator_credential(cdp, authenticator_id)
-                        if cred:
-                            try:
-                                _save_webauthn_credential(cred)
-                            except Exception:
-                                pass
-                        LOG.info("Web session refreshed via passkey")
-                        return {
-                            "ok": True,
-                            "status": "passkey_authenticated",
-                            "web_state": True,
-                            "passkey_enrolled": True,
-                        }
-                    LOG.info("Passkey login did not land on dashboard; trying password")
+                clicked = _try_click_passkey_continue(page)
+                if clicked and (
+                    _page_looks_logged_in(page) or _await_logged_in(page)
+                ):
+                    context.storage_state(path=str(WEB_STATE_PATH))
+                    cred = _capture_authenticator_credential(cdp, authenticator_id)
+                    if cred:
+                        try:
+                            _save_webauthn_credential(cred)
+                        except Exception:
+                            pass
+                    LOG.info("Web session refreshed via passkey")
+                    return {
+                        "ok": True,
+                        "status": "passkey_authenticated",
+                        "web_state": True,
+                        "passkey_enrolled": True,
+                    }
+                LOG.info("Passkey login did not land on dashboard; trying password")
 
             # Password path (often succeeds without MFA on this tenant)
-            if page.locator(
-                "input#username, input[name='username'], input[type='email']"
-            ).count():
-                _fill_email_password(page, email, password)
-            elif page.locator("input[type='password']").count():
+            if page.locator("input[type='password']").count():
                 page.locator("input[type='password']").first.fill(password)
                 _click_visible_primary(page)
                 page.wait_for_timeout(6000)
+                _await_logged_in(page, timeout_ms=30000)
+            elif page.locator(
+                "input#username, input[name='username'], input[type='email']"
+            ).count():
+                _fill_email_password(page, email, password)
+                _await_logged_in(page, timeout_ms=30000)
 
             if _page_looks_logged_in(page) or _on_passkey_enrollment(page):
                 _maybe_handle_passkey_enroll(
