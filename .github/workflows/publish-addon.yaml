@@ -79,18 +79,11 @@ jobs:
             io.hass.arch=${{ matrix.arch }}
 
       - name: Make package public
+        continue-on-error: true
         env:
           PACKAGE: ${{ matrix.arch }}-duke-scraper-worker
         run: |
           set -euo pipefail
-          # Link package to this repo, then set public visibility so HAOS can pull without auth.
-          curl -sS -X PUT \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/user/packages/container/${PACKAGE}/package" \
-            -d "{\"repository_url\":\"https://github.com/${{ github.repository }}\"}" \
-            || true
           code=$(curl -sS -o /tmp/vis.json -w "%{http_code}" -X PUT \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -99,8 +92,8 @@ jobs:
             -d '{"visibility":"public"}')
           echo "visibility HTTP ${code}"
           cat /tmp/vis.json || true
-          # Accept 204/200 success; 404 means package name path differs — fail loudly so we notice.
           if [[ "$code" != "204" && "$code" != "200" ]]; then
-            echo "Failed to set public visibility for ${PACKAGE}"
-            exit 1
+            echo "::warning::Could not auto-set ${PACKAGE} public (GITHUB_TOKEN limitation)."
+            echo "One-time manual step: Package settings → Change visibility → Public"
+            echo "https://github.com/users/${{ github.repository_owner }}/packages/container/package/${PACKAGE}"
           fi
