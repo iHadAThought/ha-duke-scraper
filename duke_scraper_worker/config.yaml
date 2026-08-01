@@ -1,5 +1,5 @@
 name: Duke Energy Scraper Worker
-version: "1.0.0"
+version: "1.0.1"
 slug: duke_scraper_worker
 description: >-
   Playwright worker for the Duke Energy Scraper Home Assistant integration.

@@ -81,7 +81,7 @@ Do this **before** (or right after) adding the integration.
 4. Wait until the add-on log shows Playwright ready / listening on `8765` (image pulls from GHCR; first pull is large)
 5. The add-on writes `/config/.duke_scraper/worker_url` automatically — leave **Worker URL** blank in the integration, or paste the URL from that file
 
-Pre-built images: `ghcr.io/ihadathought/{amd64|aarch64}-duke-scraper-worker` ([v1.0.0 release](https://github.com/iHadAThought/ha-duke-scraper/releases/tag/v1.0.0)).
+Pre-built images: `ghcr.io/ihadathought/{amd64|aarch64}-duke-scraper-worker` ([v1.0.1 release](https://github.com/iHadAThought/ha-duke-scraper/releases/tag/v1.0.1)).
 
 **One-time (required for HAOS pulls):** make both GHCR packages **Public**:
 

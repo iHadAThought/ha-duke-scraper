@@ -1,5 +1,9 @@
 # Changelog — Duke Energy Scraper Worker add-on
 
+## 1.0.1
+
+- New Home Assistant–style brand icon and logo (house + energy swooshes)
+
 ## 1.0.0
 
 - Initial public release
