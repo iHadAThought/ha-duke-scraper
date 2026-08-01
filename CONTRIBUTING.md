@@ -34,4 +34,4 @@ Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Security
 
-Please do **not** open public issues for vulnerabilities. See [SECURITY.md](SECURITY.md).
+Please do **not** open public issues for vulnerabilities. See [SECURITY.md](.github/SECURITY.md).
