@@ -1,0 +1,79 @@
+name: Publish worker add-on images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "duke_scraper_worker/**"
+      - ".github/workflows/publish-addon.yaml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_BASE: ghcr.io/ihadathought
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read add-on version
+        id: meta
+        run: |
+          VERSION=$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("duke_scraper_worker/config.yaml").read_text(encoding="utf-8")
+          m = re.search(r'^version:\s*"([^"]+)"', text, re.M)
+          if not m:
+              raise SystemExit("version not found in config.yaml")
+          print(m.group(1))
+          PY
+          )
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building ${{ matrix.arch }} version ${VERSION}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: duke_scraper_worker
+          file: duke_scraper_worker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/${{ matrix.arch }}-duke-scraper-worker:${{ steps.meta.outputs.version }}
+            ${{ env.IMAGE_BASE }}/${{ matrix.arch }}-duke-scraper-worker:latest
+          labels: |
+            org.opencontainers.image.title=Duke Energy Scraper Worker
+            org.opencontainers.image.source=https://github.com/iHadAThought/ha-duke-scraper
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            io.hass.version=${{ steps.meta.outputs.version }}
+            io.hass.type=addon
+            io.hass.arch=${{ matrix.arch }}

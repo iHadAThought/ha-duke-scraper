@@ -78,8 +78,10 @@ Do this **before** (or right after) adding the integration.
 1. **Settings → Add-ons → Add-on store → ⋮ → Repositories**
 2. Add: `https://github.com/iHadAThought/ha-duke-scraper`
 3. Find **Duke Energy Scraper Worker** → **Install** → **Start** (enable Start on boot)
-4. Wait until the add-on log shows Playwright ready / listening on `8765` (first build can take several minutes)
+4. Wait until the add-on log shows Playwright ready / listening on `8765` (image pulls from GHCR; first pull is large)
 5. The add-on writes `/config/.duke_scraper/worker_url` automatically — leave **Worker URL** blank in the integration, or paste the URL from that file
+
+Pre-built images: `ghcr.io/ihadathought/{amd64|aarch64}-duke-scraper-worker` (public packages).
 
 Supported architectures: **amd64**, **aarch64**.
 

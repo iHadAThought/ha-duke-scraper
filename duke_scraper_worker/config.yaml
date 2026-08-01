@@ -1,5 +1,5 @@
 name: Duke Energy Scraper Worker
-version: "1.4.0"
+version: "1.4.1"
 slug: duke_scraper_worker
 description: >-
   Playwright worker for the Duke Energy Scraper Home Assistant integration.
@@ -27,3 +27,4 @@ options:
   timezone: America/New_York
 schema:
   timezone: str
+image: ghcr.io/ihadathought/{arch}-duke-scraper-worker
