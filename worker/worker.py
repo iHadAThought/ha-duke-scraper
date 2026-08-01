@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import re
 import secrets
 import threading
 import traceback
@@ -38,6 +39,7 @@ DATA_DIR = Path(os.environ.get("DUKE_SCRAPER_DATA", "/data"))
 TOKENS_PATH = DATA_DIR / "tokens.json"
 WEB_STATE_PATH = DATA_DIR / "web_storage_state.json"
 WEBAUTHN_PATH = DATA_DIR / "webauthn_credential.json"
+BILLING_PATH = DATA_DIR / "billing.json"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
 HOST = os.environ.get("DUKE_SCRAPER_HOST", "0.0.0.0")
 PORT = int(os.environ.get("DUKE_SCRAPER_PORT", "8765"))
@@ -46,6 +48,7 @@ TZ = ZoneInfo("America/New_York")
 # Web My Account (dashboard Auth0 client — used for Green Button XML download)
 WEB_USAGE_URL = "https://www.duke-energy.com/my-account/usage"
 WEB_DASHBOARD_URL = "https://www.duke-energy.com/my-account/dashboard"
+WEB_BILLING_URL = "https://www.duke-energy.com/my-account/billing"
 
 API_BASE = "https://api-v2.cma.duke-energy.app"
 AUTH_TOKEN_URL = f"{API_BASE}/login/auth-token"
@@ -799,7 +802,46 @@ def _try_complete_passkey_enroll_ui(page, cdp, authenticator_id: str) -> bool:
         return False
 
     LOG.info("Passkey enrollment UI detected (%s)", page.url)
+    return _click_create_passkey(page, cdp, authenticator_id)
 
+
+def _skip_passkey_enroll_ui(page) -> bool:
+    """Click Continue Without Passkey / Not now when user disabled worker passkey."""
+    if not _on_passkey_enrollment(page):
+        return False
+    LOG.info("Skipping passkey enrollment (use_passkey=false) on %s", page.url)
+    for sel in (
+        "button:has-text('Continue Without Passkey')",
+        "button:has-text('Not now')",
+        "button:has-text('Skip')",
+        "a:has-text('Continue Without Passkey')",
+    ):
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible(timeout=1000):
+                loc.click(timeout=8000)
+                page.wait_for_timeout(4000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _maybe_handle_passkey_enroll(
+    page, cdp, authenticator_id: str | None, *, use_passkey: bool
+) -> bool:
+    """Enroll or skip Auth0 passkey interstitial based on preference."""
+    if not _on_passkey_enrollment(page):
+        return False
+    if not use_passkey:
+        _skip_passkey_enroll_ui(page)
+        return False
+    if cdp and authenticator_id:
+        return _try_complete_passkey_enroll_ui(page, cdp, authenticator_id)
+    return False
+
+
+def _click_create_passkey(page, cdp, authenticator_id: str) -> bool:
     # Prefer Create Passkey — NEVER click "Continue Without Passkey"
     # (Playwright :has-text('Continue') matches that skip button).
     create_selectors = (
@@ -920,7 +962,9 @@ def _login_still_blocked(page) -> bool:
     return False
 
 
-def _refresh_web_session(email: str, password: str) -> dict[str, Any]:
+def _refresh_web_session(
+    email: str, password: str, *, use_passkey: bool = True
+) -> dict[str, Any]:
     """Silently rebuild web_storage_state via passkey and/or password login.
 
     Returns status dict. Raises MfaRequiredError only when interactive MFA is needed.
@@ -929,19 +973,18 @@ def _refresh_web_session(email: str, password: str) -> dict[str, Any]:
         browser, context = _new_browser_context(pw)
         page = context.new_page()
         cdp, authenticator_id = _attach_virtual_authenticator(
-            context, page, seed=True
+            context, page, seed=use_passkey and _passkey_enrolled()
         )
         try:
             page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=90000)
             page.wait_for_timeout(2500)
 
-            # Prefer passkey when we have a worker credential
-            if _passkey_enrolled():
+            # Prefer passkey when enabled and we have a worker credential
+            if use_passkey and _passkey_enrolled():
                 LOG.info("Attempting Continue with Passkey")
                 if _try_click_passkey_continue(page):
                     if _page_looks_logged_in(page):
                         context.storage_state(path=str(WEB_STATE_PATH))
-                        # Bump signCount snapshot if possible
                         cred = _capture_authenticator_credential(cdp, authenticator_id)
                         if cred:
                             try:
@@ -955,7 +998,6 @@ def _refresh_web_session(email: str, password: str) -> dict[str, Any]:
                             "web_state": True,
                             "passkey_enrolled": True,
                         }
-                    # Passkey failed — fall through to password on same page
                     LOG.info("Passkey login did not land on dashboard; trying password")
 
             # Password path (often succeeds without MFA on this tenant)
@@ -968,17 +1010,19 @@ def _refresh_web_session(email: str, password: str) -> dict[str, Any]:
                 _click_visible_primary(page)
                 page.wait_for_timeout(6000)
 
-            if _page_looks_logged_in(page):
-                # Opportunistic enroll if Auth0 offers it after password
-                _try_complete_passkey_enroll_ui(page, cdp, authenticator_id)
-                context.storage_state(path=str(WEB_STATE_PATH))
-                LOG.info("Web session refreshed via password")
-                return {
-                    "ok": True,
-                    "status": "password_authenticated",
-                    "web_state": True,
-                    "passkey_enrolled": _passkey_enrolled(),
-                }
+            if _page_looks_logged_in(page) or _on_passkey_enrollment(page):
+                _maybe_handle_passkey_enroll(
+                    page, cdp, authenticator_id, use_passkey=use_passkey
+                )
+                if _page_looks_logged_in(page) or not _login_still_blocked(page):
+                    context.storage_state(path=str(WEB_STATE_PATH))
+                    LOG.info("Web session refreshed via password")
+                    return {
+                        "ok": True,
+                        "status": "password_authenticated",
+                        "web_state": True,
+                        "passkey_enrolled": _passkey_enrolled(),
+                    }
 
             # MFA required
             if "mfa" in page.url.lower():
@@ -1082,6 +1126,7 @@ class _MfaSessionManager:
         self._authenticator_id: str | None = None
         self._email: str | None = None
         self._started_at: datetime | None = None
+        self._use_passkey: bool = True
 
     def _loop(self) -> None:
         while True:
@@ -1117,11 +1162,22 @@ class _MfaSessionManager:
             raise box["error"]
         return box["result"]
 
-    def start(self, email: str, password: str) -> dict[str, Any]:
-        return self._call("start", timeout=120, email=email, password=password)
+    def start(
+        self, email: str, password: str, *, use_passkey: bool = True
+    ) -> dict[str, Any]:
+        return self._call(
+            "start",
+            timeout=120,
+            email=email,
+            password=password,
+            use_passkey=use_passkey,
+        )
 
-    def complete(self, code: str) -> dict[str, Any]:
-        return self._call("complete", timeout=90, code=code)
+    def complete(self, code: str, *, use_passkey: bool | None = None) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"code": code}
+        if use_passkey is not None:
+            kwargs["use_passkey"] = use_passkey
+        return self._call("complete", timeout=90, **kwargs)
 
     def cancel(self) -> dict[str, Any]:
         return self._call("cancel", timeout=30)
@@ -1153,6 +1209,7 @@ class _MfaSessionManager:
         self._authenticator_id = None
         self._email = None
         self._started_at = None
+        self._use_passkey = True
 
     def _do_status(self) -> dict[str, Any]:
         pending = self._page is not None
@@ -1172,15 +1229,18 @@ class _MfaSessionManager:
         self._close_unlocked()
         return {"ok": True, "cancelled": True}
 
-    def _do_start(self, email: str, password: str) -> dict[str, Any]:
+    def _do_start(
+        self, email: str, password: str, use_passkey: bool = True
+    ) -> dict[str, Any]:
         self._close_unlocked()
-        LOG.info("MFA start for %s", email)
+        self._use_passkey = bool(use_passkey)
+        LOG.info("MFA start for %s (use_passkey=%s)", email, self._use_passkey)
         self._pw = sync_playwright().start()
         self._browser, self._context = _new_browser_context(self._pw)
         page = self._context.new_page()
         self._page = page
         self._cdp, self._authenticator_id = _attach_virtual_authenticator(
-            self._context, page, seed=True
+            self._context, page, seed=self._use_passkey and _passkey_enrolled()
         )
         self._email = email
         self._started_at = datetime.now(timezone.utc)
@@ -1188,8 +1248,12 @@ class _MfaSessionManager:
         page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=90000)
         page.wait_for_timeout(2000)
 
-        # Prefer passkey if enrolled
-        if _passkey_enrolled() and _try_click_passkey_continue(page):
+        # Prefer passkey if enrolled and enabled
+        if (
+            self._use_passkey
+            and _passkey_enrolled()
+            and _try_click_passkey_continue(page)
+        ):
             if _page_looks_logged_in(page):
                 self._context.storage_state(path=str(WEB_STATE_PATH))
                 self._close_unlocked()
@@ -1230,11 +1294,12 @@ class _MfaSessionManager:
 
         # No MFA — dashboard, or passkey enrollment after password
         if _on_passkey_enrollment(page):
-            enrolled = False
-            if self._cdp and self._authenticator_id:
-                enrolled = _try_complete_passkey_enroll_ui(
-                    page, self._cdp, self._authenticator_id
-                )
+            enrolled = _maybe_handle_passkey_enroll(
+                page,
+                self._cdp,
+                self._authenticator_id,
+                use_passkey=self._use_passkey,
+            )
             self._context.storage_state(path=str(WEB_STATE_PATH))
             self._close_unlocked()
             return {
@@ -1248,10 +1313,12 @@ class _MfaSessionManager:
             "mfa" not in page.url.lower()
             and "login.duke-energy.com" not in page.url.lower()
         ):
-            if self._cdp and self._authenticator_id:
-                _try_complete_passkey_enroll_ui(
-                    page, self._cdp, self._authenticator_id
-                )
+            _maybe_handle_passkey_enroll(
+                page,
+                self._cdp,
+                self._authenticator_id,
+                use_passkey=self._use_passkey,
+            )
             self._context.storage_state(path=str(WEB_STATE_PATH))
             self._close_unlocked()
             LOG.info("Web login succeeded without MFA")
@@ -1304,11 +1371,13 @@ class _MfaSessionManager:
             "web_state": False,
         }
 
-    def _do_complete(self, code: str) -> dict[str, Any]:
+    def _do_complete(self, code: str, use_passkey: bool | None = None) -> dict[str, Any]:
         if not self._page or not self._context:
             raise RuntimeError(
                 "No pending MFA session. Press Request code first."
             )
+        if use_passkey is not None:
+            self._use_passkey = bool(use_passkey)
         page = self._page
         code = (code or "").strip()
         if not code:
@@ -1321,7 +1390,7 @@ class _MfaSessionManager:
             self._close_unlocked()
             raise RuntimeError("MFA session expired. Request a new code.")
 
-        LOG.info("Submitting MFA code")
+        LOG.info("Submitting MFA code (use_passkey=%s)", self._use_passkey)
         try:
             remember = page.locator("label:has-text('Remember this device')").first
             if remember.count() and remember.is_visible(timeout=500):
@@ -1339,11 +1408,13 @@ class _MfaSessionManager:
         page.wait_for_timeout(8000)
 
         enrolled = False
-        # After MFA, Auth0 often offers passkey enrollment — complete it with CDP
-        if self._cdp and self._authenticator_id and _on_passkey_enrollment(page):
-            LOG.info("MFA accepted; completing passkey enrollment")
-            enrolled = _try_complete_passkey_enroll_ui(
-                page, self._cdp, self._authenticator_id
+        if _on_passkey_enrollment(page):
+            LOG.info("MFA accepted; handling passkey enrollment interstitial")
+            enrolled = _maybe_handle_passkey_enroll(
+                page,
+                self._cdp,
+                self._authenticator_id,
+                use_passkey=self._use_passkey,
             )
             page.wait_for_timeout(3000)
 
@@ -1353,18 +1424,19 @@ class _MfaSessionManager:
                 snippet = page.locator("body").inner_text(timeout=2000)[:300]
             except Exception:
                 pass
-            # Keep session open so user can retry code / we can retry enroll
             raise RuntimeError(
                 f"MFA code rejected or login incomplete (url={page.url}). {snippet!r}"
             )
 
-        # If we somehow enrolled but aren't on dashboard yet, wait briefly
         if not _page_looks_logged_in(page):
             page.wait_for_timeout(5000)
 
-        if self._cdp and self._authenticator_id and not enrolled:
-            enrolled = _try_complete_passkey_enroll_ui(
-                page, self._cdp, self._authenticator_id
+        if not enrolled:
+            enrolled = _maybe_handle_passkey_enroll(
+                page,
+                self._cdp,
+                self._authenticator_id,
+                use_passkey=self._use_passkey,
             )
 
         self._context.storage_state(path=str(WEB_STATE_PATH))
@@ -1406,7 +1478,13 @@ def _web_session_valid() -> bool:
             browser.close()
 
 
-def _ensure_web_session(email: str, password: str, mfa_code: str | None = None) -> None:
+def _ensure_web_session(
+    email: str,
+    password: str,
+    mfa_code: str | None = None,
+    *,
+    use_passkey: bool = True,
+) -> None:
     """Ensure a valid web storage state exists for Green Button download."""
     debug_state = DATA_DIR / "debug" / "web_dashboard_state.json"
     if not WEB_STATE_PATH.exists() and debug_state.exists():
@@ -1417,10 +1495,10 @@ def _ensure_web_session(email: str, password: str, mfa_code: str | None = None) 
         # Complete any pending MFA, or start+complete in one shot
         status = _MFA.status()
         if not status.get("pending"):
-            started = _MFA.start(email, password)
+            started = _MFA.start(email, password, use_passkey=use_passkey)
             if started.get("status") == "already_authenticated":
                 return
-        _MFA.complete(mfa_code)
+        _MFA.complete(mfa_code, use_passkey=use_passkey)
         return
 
     if _web_session_valid():
@@ -1429,7 +1507,7 @@ def _ensure_web_session(email: str, password: str, mfa_code: str | None = None) 
 
     LOG.warning("Web session missing or expired; attempting silent refresh")
     try:
-        result = _refresh_web_session(email, password)
+        result = _refresh_web_session(email, password, use_passkey=use_passkey)
         LOG.info("Silent web refresh: %s", result.get("status"))
         return
     except MfaRequiredError:
@@ -1538,6 +1616,320 @@ def run_validate(email: str, password: str) -> dict[str, Any]:
     }
 
 
+def _aggregate_daily(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sum kWh rows into calendar-day buckets (America/New_York)."""
+    by_day: dict[str, float] = {}
+    for item in rows:
+        try:
+            stamp = datetime.fromisoformat(item["start"])
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=TZ)
+            else:
+                stamp = stamp.astimezone(TZ)
+            day = stamp.replace(hour=0, minute=0, second=0, microsecond=0)
+            by_day[day.isoformat()] = by_day.get(day.isoformat(), 0.0) + float(
+                item.get("kwh") or 0
+            )
+        except Exception:
+            continue
+    return [{"start": k, "kwh": v} for k, v in sorted(by_day.items())]
+
+
+def _billing_cache_fresh() -> dict[str, Any] | None:
+    if not BILLING_PATH.is_file():
+        return None
+    try:
+        data = json.loads(BILLING_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    fetched = data.get("fetched_at")
+    if not fetched:
+        return None
+    try:
+        fetched_dt = datetime.fromisoformat(fetched)
+        if fetched_dt.tzinfo is None:
+            fetched_dt = fetched_dt.replace(tzinfo=TZ)
+        else:
+            fetched_dt = fetched_dt.astimezone(TZ)
+    except Exception:
+        return None
+    today = datetime.now(TZ).date()
+    if fetched_dt.date() == today:
+        return data
+    return None
+
+
+def _parse_money(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value)
+    cleaned = (
+        text.replace("$", "")
+        .replace(",", "")
+        .replace("USD", "")
+        .strip()
+    )
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _normalize_billing_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Map heterogeneous Duke billing JSON into a stable sensor-friendly dict."""
+    flat: dict[str, Any] = {}
+
+    def walk(obj: Any, prefix: str = "") -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                key = f"{prefix}.{k}" if prefix else str(k)
+                flat[key.lower()] = v
+                walk(v, key)
+        elif isinstance(obj, list) and obj and isinstance(obj[0], dict):
+            walk(obj[0], prefix)
+
+    walk(raw)
+
+    def find_num(*needles: str) -> float | None:
+        for key, val in flat.items():
+            if any(n in key for n in needles):
+                parsed = _parse_money(val)
+                if parsed is not None:
+                    return parsed
+        return None
+
+    def find_str(*needles: str) -> str | None:
+        for key, val in flat.items():
+            if any(n in key for n in needles) and val not in (None, ""):
+                return str(val)
+        return None
+
+    current = find_num(
+        "amountdue",
+        "amount_due",
+        "currentbalance",
+        "current_balance",
+        "balancedue",
+        "totaldue",
+        "billamount",
+        "currentbill",
+    )
+    estimated = find_num(
+        "estimatedbill",
+        "estimated_bill",
+        "projectedbill",
+        "projected_bill",
+        "billestimate",
+        "estimateamount",
+    )
+    rate = find_num(
+        "rateperkwh",
+        "per_kwh",
+        "perkwh",
+        "energyrate",
+        "kwhrate",
+        "priceperkwh",
+    )
+    kwh = find_num("kwhused", "totalkwh", "billedkwh", "usagekwh")
+    energy_charge = find_num("energycharge", "usagecharge", "electriccharge")
+    if rate is None and energy_charge is not None and kwh and kwh > 0:
+        rate = round(energy_charge / kwh, 6)
+
+    due = find_str(
+        "duedate",
+        "due_date",
+        "paymentdue",
+        "billduedate",
+        "nextpaymentdate",
+    )
+    period_start = find_str("periodstart", "billingperiodstart", "startdate")
+    period_end = find_str("periodend", "billingperiodend", "enddate")
+    last_bill = find_str("lastbilldate", "billdate", "statementdate")
+    message = find_str(
+        "alert",
+        "message",
+        "statusmessage",
+        "billingmessage",
+        "notification",
+        "warning",
+    )
+
+    status_raw = (
+        find_str("accountstatus", "billingstatus", "paymentstatus", "status") or ""
+    ).lower()
+    past_due = False
+    status = "unknown"
+    blob = " ".join(
+        str(v).lower()
+        for v in (
+            status_raw,
+            message or "",
+            json.dumps(raw).lower()[:2000],
+        )
+    )
+    if any(x in blob for x in ("past due", "pastdue", "delinquent", "late fee", " overdue")):
+        past_due = True
+        status = "past_due"
+    elif any(x in blob for x in ("disconnect", "collection", "shutoff", "shut off")):
+        past_due = True
+        status = "past_due"
+        message = message or "Disconnect / collection notice detected"
+    elif any(x in blob for x in ("pending", "processing payment", "payment scheduled")):
+        status = "pending"
+    elif any(x in blob for x in ("current", "paid", "no balance", "thank you")):
+        status = "ok"
+        past_due = False
+    elif current is not None or estimated is not None or due:
+        status = "ok"
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "energy_rate_usd_per_kwh": rate,
+        "current_bill_usd": current,
+        "estimated_bill_usd": estimated,
+        "bill_due_date": (due or "")[:10] or None,
+        "period_start": (period_start or "")[:10] or None,
+        "period_end": (period_end or "")[:10] or None,
+        "last_bill_date": (last_bill or "")[:10] or None,
+        "billing_status": status,
+        "past_due": past_due,
+        "billing_message": message,
+        "raw_keys": sorted({k.split(".")[-1] for k in flat})[:80],
+        "fetched_at": datetime.now(TZ).isoformat(),
+        "source": "duke_web_billing",
+    }
+    return out
+
+
+def run_billing(
+    email: str, password: str, *, use_passkey: bool = True, force: bool = False
+) -> dict[str, Any]:
+    """Fetch billing snapshot at most once per calendar day (unless force)."""
+    _ensure_dirs()
+    if not force:
+        cached = _billing_cache_fresh()
+        if cached:
+            LOG.info("Returning cached billing snapshot from %s", cached.get("fetched_at"))
+            return cached
+
+    _ensure_web_session(email, password, use_passkey=use_passkey)
+
+    collected: list[Any] = []
+    with sync_playwright() as pw:
+        browser, context = _new_browser_context(pw, str(WEB_STATE_PATH))
+        page = context.new_page()
+        try:
+            page.goto(WEB_BILLING_URL, wait_until="domcontentloaded", timeout=90000)
+            page.wait_for_timeout(4000)
+            if "login" in page.url.lower():
+                raise MfaRequiredError("Web session expired during billing fetch")
+
+            # Capture XHR-ish billing JSON via page.evaluate fetches
+            paths = [
+                "/api/UsageAnalysis/GetBillingInformation",
+                "/api/Billing/GetBillingInformation",
+                "/api/Billing/GetAccountBillingSummary",
+                "/api/Account/GetBillingSummary",
+                "/api/Bill/GetCurrentBill",
+                "/cdxp/api/core/billing/summary",
+                "/cdxp/api/core/billing/current",
+            ]
+            for path in paths:
+                try:
+                    result = page.evaluate(
+                        """async (path) => {
+                          try {
+                            const r = await fetch(path, {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json, text/plain, */*',
+                              },
+                              body: JSON.stringify({}),
+                              credentials: 'include',
+                            });
+                            const text = await r.text();
+                            return {path, status: r.status, text: text.slice(0, 50000)};
+                          } catch (e) {
+                            return {path, error: String(e)};
+                          }
+                        }""",
+                        path,
+                    )
+                    if result.get("status") == 200 and result.get("text"):
+                        try:
+                            collected.append(json.loads(result["text"]))
+                        except Exception:
+                            collected.append({"path": path, "text": result["text"][:2000]})
+                except Exception as err:
+                    LOG.debug("Billing probe %s failed: %s", path, err)
+
+            # Also scrape visible amount / due date text as fallback
+            try:
+                body_text = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                body_text = ""
+            scraped: dict[str, Any] = {"page_text_snip": body_text[:4000]}
+            m_amt = re.search(
+                r"(?:amount due|current balance|balance due)\D{0,20}(\$?[\d,]+\.\d{2})",
+                body_text,
+                re.I,
+            )
+            if m_amt:
+                scraped["amountDue"] = m_amt.group(1)
+            m_est = re.search(
+                r"(?:estimated bill|bill estimate|projected bill)\D{0,20}(\$?[\d,]+\.\d{2})",
+                body_text,
+                re.I,
+            )
+            if m_est:
+                scraped["estimatedBill"] = m_est.group(1)
+            m_due = re.search(
+                r"(?:due date|payment due)\D{0,20}(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+ \d{1,2},? \d{4})",
+                body_text,
+                re.I,
+            )
+            if m_due:
+                scraped["dueDate"] = m_due.group(1)
+            collected.append(scraped)
+            context.storage_state(path=str(WEB_STATE_PATH))
+        finally:
+            browser.close()
+
+    merged: dict[str, Any] = {}
+    for item in collected:
+        if isinstance(item, dict):
+            merged.update(item)
+    result = _normalize_billing_payload(merged)
+    has_signal = any(
+        result.get(k) is not None
+        for k in (
+            "energy_rate_usd_per_kwh",
+            "current_bill_usd",
+            "estimated_bill_usd",
+            "bill_due_date",
+        )
+    ) or result.get("billing_status") not in (None, "unknown")
+    if not has_signal:
+        result["ok"] = False
+        result["error"] = (
+            "Duke billing page did not expose amount, estimate, rate, or due date "
+            "for this account. Usage exports remain kWh-only."
+        )
+    BILLING_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    LOG.info(
+        "Billing snapshot saved (ok=%s status=%s current=%s estimated=%s rate=%s)",
+        result.get("ok"),
+        result.get("billing_status"),
+        result.get("current_bill_usd"),
+        result.get("estimated_bill_usd"),
+        result.get("energy_rate_usd_per_kwh"),
+    )
+    return result
+
+
 def run_export(
     email: str,
     password: str,
@@ -1546,12 +1938,16 @@ def run_export(
     meter_serial: str | None = None,
     interval: str = "hourly",
     mfa_code: str | None = None,
+    *,
+    use_passkey: bool = True,
 ) -> dict[str, Any]:
     _ensure_dirs()
     interval_norm = (interval or "hourly").strip().lower().replace("-", "_")
     if interval_norm in {"fifteen_minute", "fifteen", "15", "15min", "15_minute"}:
         LOG.info("Fifteen-minute export via Green Button XML %s → %s", start, end)
-        _ensure_web_session(email, password, mfa_code=mfa_code)
+        _ensure_web_session(
+            email, password, mfa_code=mfa_code, use_passkey=use_passkey
+        )
         xml_path = _download_green_button_xml()
         rows = _parse_espi_intervals(xml_path, start, end)
         return {
@@ -1564,6 +1960,8 @@ def run_export(
             "end": end.isoformat(),
             "source": "green_button_xml",
         }
+
+    want_daily = interval_norm in {"daily", "day", "1d", "1_day"}
 
     tokens = _get_tokens(email, password)
     tokens = _ensure_duke_api_token(tokens, email)
@@ -1600,11 +1998,16 @@ def run_export(
         for item in hours
         if start <= datetime.fromisoformat(item["start"]).date() <= end
     ]
+    if want_daily:
+        filtered = _aggregate_daily(filtered)
+        out_interval = "daily"
+    else:
+        out_interval = "hourly"
     return {
         "ok": True,
         "hours": filtered,
         "count": len(filtered),
-        "interval": "hourly",
+        "interval": out_interval,
         "meter_serial": chosen.get("serialNum"),
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -1658,11 +2061,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200 if result.get("ok") else 401, result)
                 return
             if path == "/mfa/start":
-                result = _MFA.start(body["email"], body["password"])
+                result = _MFA.start(
+                    body["email"],
+                    body["password"],
+                    use_passkey=bool(body.get("use_passkey", True)),
+                )
                 self._send(200, result)
                 return
             if path == "/mfa/complete":
-                result = _MFA.complete(str(body.get("mfa_code") or body.get("code") or ""))
+                result = _MFA.complete(
+                    str(body.get("mfa_code") or body.get("code") or ""),
+                    use_passkey=bool(body.get("use_passkey", True)),
+                )
                 self._send(200, result)
                 return
             if path == "/mfa/cancel":
@@ -1671,6 +2081,27 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/passkey/enroll":
                 result = _MFA.enroll_passkey(body["email"], body["password"])
                 self._send(200 if result.get("ok") else 400, result)
+                return
+            if path == "/billing":
+                try:
+                    result = run_billing(
+                        body["email"],
+                        body["password"],
+                        use_passkey=bool(body.get("use_passkey", True)),
+                        force=bool(body.get("force", False)),
+                    )
+                except MfaRequiredError as err:
+                    self._send(
+                        401,
+                        {
+                            "ok": False,
+                            "error": str(err),
+                            "error_code": "mfa_required",
+                            "passkey_enrolled": _passkey_enrolled(),
+                        },
+                    )
+                    return
+                self._send(200 if result.get("ok") else 200, result)
                 return
             if path == "/export":
                 try:
@@ -1682,6 +2113,7 @@ class Handler(BaseHTTPRequestHandler):
                         body.get("meter_serial"),
                         interval=str(body.get("interval") or "hourly"),
                         mfa_code=body.get("mfa_code"),
+                        use_passkey=bool(body.get("use_passkey", True)),
                     )
                 except MfaRequiredError as err:
                     self._send(

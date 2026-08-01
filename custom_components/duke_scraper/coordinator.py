@@ -1,4 +1,4 @@
-"""Coordinator: scrape Duke hourly usage and insert external statistics."""
+"""Coordinator: scrape Duke usage and insert external statistics."""
 
 from __future__ import annotations
 
@@ -33,33 +33,46 @@ from .const import (
     BACKFILL_DONE_KEY,
     BACKFILL_END_YEAR,
     BACKFILL_START_YEAR,
+    CONF_BACKFILL_DAYS,
     CONF_EMAIL,
+    CONF_FETCH_BILLING,
+    CONF_INTERVAL,
     CONF_METER_SERIAL,
     CONF_PASSWORD,
+    CONF_UPDATE_MINUTES,
+    CONF_USE_PASSKEY,
     CONF_WORKER_URL,
     DATA_DIR_NAME,
+    DEFAULT_BACKFILL_DAYS,
+    DEFAULT_FETCH_BILLING,
+    DEFAULT_INTERVAL,
     DEFAULT_METER_SERIAL,
+    DEFAULT_UPDATE_MINUTES,
+    DEFAULT_USE_PASSKEY,
     DEFAULT_WORKER_URL,
     DOMAIN,
     LOOKBACK_DAYS,
     NOTIFICATION_MFA_ID,
-    UPDATE_INTERVAL_HOURS,
-    UPDATE_JITTER_MINUTES,
     WEB_MFA_OK_KEY,
     WORKER_URL_FILE,
+    option,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _random_update_interval() -> timedelta:
-    """Return ~6h with ±jitter so polls aren't on a fixed clock."""
-    base = UPDATE_INTERVAL_HOURS * 60
-    jitter = UPDATE_JITTER_MINUTES
-    return timedelta(minutes=random.randint(base - jitter, base + jitter))
+def _update_interval_for(entry: ConfigEntry) -> timedelta:
+    """Return poll interval with ~±10% jitter (min ±5 minutes)."""
+    base = int(option(entry, CONF_UPDATE_MINUTES, DEFAULT_UPDATE_MINUTES))
+    if base < 30:
+        base = 30
+    jitter = max(5, int(base * 0.1))
+    low = max(30, base - jitter)
+    high = base + jitter
+    return timedelta(minutes=random.randint(low, high))
 
 
-class DukeScraperCoordinator(DataUpdateCoordinator[None]):
+class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
     """Poll the Playwright worker and write energy statistics."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -68,11 +81,12 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
             _LOGGER,
             config_entry=entry,
             name="Duke Energy Scraper",
-            update_interval=_random_update_interval(),
+            update_interval=_update_interval_for(entry),
         )
         self.entry = entry
         self._statistic_ids: set[str] = set()
         self._worker_url_cache: str | None = None
+        self.billing: dict[str, Any] | None = None
 
         @callback
         def _dummy_listener() -> None:
@@ -107,53 +121,78 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
         self._worker_url_cache = url
         return url
 
-    async def _async_update_data(self) -> None:
-        """Fetch usage and insert statistics."""
+    async def _async_update_data(self) -> dict[str, Any] | None:
+        """Fetch usage (+ optional billing) and insert statistics."""
         try:
             try:
                 usage = await self._async_fetch_usage()
             except Exception as err:
                 raise UpdateFailed(str(err)) from err
 
-            if not usage:
+            if usage:
+                await self._async_insert_statistics(usage)
+            else:
                 _LOGGER.debug("No usage rows returned")
-                return
 
-            await self._async_insert_statistics(usage)
-
-            if not self.entry.data.get(BACKFILL_DONE_KEY):
+            if not self.entry.data.get(BACKFILL_DONE_KEY) and usage:
                 self.hass.config_entries.async_update_entry(
                     self.entry,
                     data={**self.entry.data, BACKFILL_DONE_KEY: True},
                 )
                 _LOGGER.info("Duke scraper first-run backfill marked complete")
+
+            if option(self.entry, CONF_FETCH_BILLING, DEFAULT_FETCH_BILLING):
+                try:
+                    self.billing = await self._async_fetch_billing()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("Billing snapshot failed: %s", err)
+
+            return self.billing
         finally:
-            # Reschedule next poll ~6h from now with fresh random jitter.
-            self.update_interval = _random_update_interval()
+            self.update_interval = _update_interval_for(self.entry)
             _LOGGER.info("Next Duke scrape scheduled in %s", self.update_interval)
+
+    def _backfill_start(self, tz, end: datetime) -> datetime:
+        days = str(option(self.entry, CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS))
+        if days == "max":
+            return datetime(BACKFILL_START_YEAR, 1, 1, tzinfo=tz)
+        try:
+            n = int(days)
+        except ValueError:
+            n = 365
+        return end - timedelta(days=max(1, n))
 
     async def _async_fetch_usage(self) -> dict[datetime, float]:
         """Call worker /export for the appropriate date range."""
         tz = await dt_util.async_get_time_zone("America/New_York")
         now = dt_util.now(tz)
         end = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+        interval = str(option(self.entry, CONF_INTERVAL, DEFAULT_INTERVAL))
+        use_passkey = bool(option(self.entry, CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY))
+        update_minutes = int(
+            option(self.entry, CONF_UPDATE_MINUTES, DEFAULT_UPDATE_MINUTES)
+        )
 
         if not self.entry.data.get(BACKFILL_DONE_KEY):
-            start = datetime(BACKFILL_START_YEAR, 1, 1, tzinfo=tz)
+            start = self._backfill_start(tz, end)
             end_cap = datetime(BACKFILL_END_YEAR, 12, 31, tzinfo=tz)
             end = min(end, end_cap)
             mode = "backfill"
-            interval = "hourly"
+            # Prefer hourly API for large backfills; daily aggregates from hourly.
+            if interval == "fifteen_minute":
+                fetch_interval = "hourly"
+            else:
+                fetch_interval = interval
         else:
-            start = end - timedelta(days=LOOKBACK_DAYS)
+            lookback = max(LOOKBACK_DAYS, max(1, (update_minutes * 2 + 1439) // 1440))
+            start = end - timedelta(days=lookback)
             mode = "incremental"
-            # Post-backfill: Green Button XML with true 15-minute intervals
-            interval = "fifteen_minute"
+            fetch_interval = interval
 
         _LOGGER.info(
             "Duke scraper %s (%s) fetch %s → %s via %s",
             mode,
-            interval,
+            fetch_interval,
             start.date(),
             end.date(),
             await self._async_worker_url(),
@@ -166,7 +205,8 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
             "meter_serial": self.meter_serial,
             "start": start.date().isoformat(),
             "end": end.date().isoformat(),
-            "interval": interval,
+            "interval": fetch_interval,
+            "use_passkey": use_passkey,
         }
         timeout = aiohttp.ClientTimeout(
             total=60 * 45 if mode == "backfill" else 60 * 15
@@ -187,9 +227,8 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
                 raise UpdateFailed(err)
 
         rows: dict[datetime, float] = {}
-        fifteen = interval == "fifteen_minute"
+        result_interval = str(body.get("interval") or fetch_interval)
         for item in body.get("hours") or []:
-            # item: {"start": "ISO8601", "kwh": float}
             stamp = dt_util.parse_datetime(item["start"])
             if stamp is None:
                 continue
@@ -197,9 +236,11 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
                 stamp = stamp.replace(tzinfo=tz)
             else:
                 stamp = stamp.astimezone(tz)
-            if fifteen:
+            if result_interval in {"fifteen_minute", "fifteen", "15"}:
                 minute = (stamp.minute // 15) * 15
                 stamp = stamp.replace(minute=minute, second=0, microsecond=0)
+            elif result_interval == "daily":
+                stamp = stamp.replace(hour=0, minute=0, second=0, microsecond=0)
             else:
                 stamp = stamp.replace(minute=0, second=0, microsecond=0)
             kwh = float(item["kwh"])
@@ -209,9 +250,34 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
         _LOGGER.info(
             "Duke scraper received %s %s points",
             len(rows),
-            "fifteen-minute" if fifteen else "hourly",
+            result_interval,
         )
         return rows
+
+    async def _async_fetch_billing(self) -> dict[str, Any] | None:
+        """Ask worker for a cached daily billing snapshot."""
+        session = async_get_clientsession(self.hass)
+        use_passkey = bool(option(self.entry, CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY))
+        payload = {
+            "email": self.entry.data[CONF_EMAIL],
+            "password": self.entry.data[CONF_PASSWORD],
+            "use_passkey": use_passkey,
+        }
+        async with session.post(
+            f"{await self._async_worker_url()}/billing",
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=120),
+        ) as resp:
+            body = await resp.json(content_type=None)
+            if resp.status == 401 or body.get("error_code") == "mfa_required":
+                await self._async_handle_mfa_required(
+                    body.get("error") or "Duke web MFA required"
+                )
+                return self.billing
+            if resp.status != 200 or not body.get("ok"):
+                _LOGGER.debug("Billing unavailable: %s", body.get("error"))
+                return body if isinstance(body, dict) else self.billing
+            return body
 
     async def _async_handle_mfa_required(self, detail: str) -> None:
         """Notify user and open reauth so they can request/enter a new MFA code."""
@@ -232,7 +298,7 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
                         "The Duke Energy web session expired (usually after ~30 days). "
                         "Open **Settings → Devices & services → Duke Energy Scraper → "
                         "Configure** (or Reauthenticate) to request a new email code "
-                        "and resume 15-minute usage downloads.\n\n"
+                        "and resume usage downloads.\n\n"
                         f"Detail: {detail}"
                     ),
                 },
@@ -258,10 +324,10 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
             consumption_sum = 0.0
             last_stats_time = None
         else:
-            # Use 5-minute period so 15-minute starts are visible when continuing sums.
             period = "5minute"
-            first = min(usage.keys())
-            if first.minute == 0 and all(k.minute == 0 for k in list(usage)[:24]):
+            if usage and all(k.minute == 0 and k.hour == 0 for k in list(usage)[:3]):
+                period = "day"
+            elif usage and all(k.minute == 0 for k in list(usage)[:24]):
                 period = "hour"
             stats = await get_instance(self.hass).async_add_executor_job(
                 statistics_during_period,
@@ -279,7 +345,6 @@ class DukeScraperCoordinator(DataUpdateCoordinator[None]):
                 )
                 last_stats_time = stats[consumption_statistic_id][0]["start"]
             else:
-                # Overlap window empty — continue from last absolute sum
                 consumption_sum = cast(
                     "float", last_stat[consumption_statistic_id][0]["sum"]
                 )

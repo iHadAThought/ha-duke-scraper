@@ -1,4 +1,4 @@
-"""Config flow for Duke Energy Scraper (credentials → MFA)."""
+"""Config flow for Duke Energy Scraper (credentials → preferences → MFA)."""
 
 from __future__ import annotations
 
@@ -12,21 +12,37 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    BACKFILL_DAY_CHOICES,
+    CONF_BACKFILL_DAYS,
     CONF_EMAIL,
+    CONF_FETCH_BILLING,
+    CONF_INTERVAL,
     CONF_METER_SERIAL,
     CONF_MFA_CODE,
     CONF_REQUEST_CODE,
+    CONF_UPDATE_MINUTES,
+    CONF_USE_PASSKEY,
     CONF_WORKER_URL,
     DATA_DIR_NAME,
+    DEFAULT_BACKFILL_DAYS,
+    DEFAULT_FETCH_BILLING,
+    DEFAULT_INTERVAL,
     DEFAULT_METER_SERIAL,
+    DEFAULT_UPDATE_MINUTES,
+    DEFAULT_USE_PASSKEY,
     DEFAULT_WORKER_URL,
     DOMAIN,
+    INTERVAL_CHOICES,
     NOTIFICATION_MFA_ID,
+    UPDATE_MINUTE_CHOICES,
     WEB_MFA_OK_KEY,
     WORKER_URL_FILE,
+    default_options,
+    option,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -117,33 +133,115 @@ async def _ensure_worker_reachable(hass: HomeAssistant, worker_url: str) -> None
 
 
 async def _mfa_start(
-    hass: HomeAssistant, worker_url: str, email: str, password: str
+    hass: HomeAssistant,
+    worker_url: str,
+    email: str,
+    password: str,
+    *,
+    use_passkey: bool = True,
 ) -> dict[str, Any]:
     return await _worker_post(
         hass,
         worker_url,
         "/mfa/start",
-        {"email": email, "password": password},
+        {"email": email, "password": password, "use_passkey": use_passkey},
         timeout=120,
     )
 
 
 async def _mfa_complete(
-    hass: HomeAssistant, worker_url: str, code: str
+    hass: HomeAssistant,
+    worker_url: str,
+    code: str,
+    *,
+    use_passkey: bool = True,
 ) -> dict[str, Any]:
     return await _worker_post(
         hass,
         worker_url,
         "/mfa/complete",
-        {"mfa_code": code},
+        {"mfa_code": code, "use_passkey": use_passkey},
         timeout=90,
     )
+
+
+def _preferences_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    d = {**default_options(), **(defaults or {})}
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_USE_PASSKEY, default=bool(d[CONF_USE_PASSKEY])
+            ): bool,
+            vol.Required(
+                CONF_BACKFILL_DAYS, default=str(d[CONF_BACKFILL_DAYS])
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": k, "label": v}
+                        for k, v in BACKFILL_DAY_CHOICES.items()
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_INTERVAL, default=str(d[CONF_INTERVAL])
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": k, "label": v} for k, v in INTERVAL_CHOICES.items()
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_UPDATE_MINUTES, default=int(d[CONF_UPDATE_MINUTES])
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": str(k), "label": v}
+                        for k, v in UPDATE_MINUTE_CHOICES.items()
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_FETCH_BILLING, default=bool(d[CONF_FETCH_BILLING])
+            ): bool,
+        }
+    )
+
+
+def _normalize_preferences(user_input: dict[str, Any]) -> dict[str, Any]:
+    minutes = user_input.get(CONF_UPDATE_MINUTES, DEFAULT_UPDATE_MINUTES)
+    if isinstance(minutes, str):
+        minutes = int(minutes)
+    backfill = str(user_input.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS))
+    interval = str(user_input.get(CONF_INTERVAL, DEFAULT_INTERVAL))
+    if minutes not in UPDATE_MINUTE_CHOICES:
+        minutes = DEFAULT_UPDATE_MINUTES
+    if minutes < 30:
+        minutes = 30
+    if backfill not in BACKFILL_DAY_CHOICES:
+        backfill = DEFAULT_BACKFILL_DAYS
+    if interval not in INTERVAL_CHOICES:
+        interval = DEFAULT_INTERVAL
+    return {
+        CONF_USE_PASSKEY: bool(
+            user_input.get(CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY)
+        ),
+        CONF_BACKFILL_DAYS: backfill,
+        CONF_INTERVAL: interval,
+        CONF_UPDATE_MINUTES: int(minutes),
+        CONF_FETCH_BILLING: bool(
+            user_input.get(CONF_FETCH_BILLING, DEFAULT_FETCH_BILLING)
+        ),
+    }
 
 
 class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Duke Energy Scraper."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._email: str = ""
@@ -151,6 +249,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._meter: str = DEFAULT_METER_SERIAL
         self._worker: str = DEFAULT_WORKER_URL
         self._mfa_hint: str = ""
+        self._options: dict[str, Any] = default_options()
         self._reauth_entry: config_entries.ConfigEntry | None = None
 
     async def async_step_user(
@@ -181,7 +280,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     user_input.get(CONF_METER_SERIAL) or DEFAULT_METER_SERIAL
                 ).strip()
                 self._worker = worker
-                return await self.async_step_mfa()
+                return await self.async_step_preferences()
 
         return self.async_show_form(
             step_id="user",
@@ -199,11 +298,25 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    async def async_step_preferences(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Scraping preferences (before MFA so passkey opt-in is known)."""
+        if user_input is not None:
+            self._options = _normalize_preferences(user_input)
+            return await self.async_step_mfa()
+
+        return self.async_show_form(
+            step_id="preferences",
+            data_schema=_preferences_schema(self._options),
+        )
+
     async def async_step_mfa(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """MFA: request email code and/or submit it."""
         errors: dict[str, str] = {}
+        use_passkey = bool(self._options.get(CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY))
 
         if user_input is not None:
             request_code = bool(user_input.get(CONF_REQUEST_CODE))
@@ -212,7 +325,11 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if request_code or not code:
                 try:
                     result = await _mfa_start(
-                        self.hass, self._worker, self._email, self._password
+                        self.hass,
+                        self._worker,
+                        self._email,
+                        self._password,
+                        use_passkey=use_passkey,
                     )
                 except ValueError as err:
                     _LOGGER.warning("MFA request failed: %s", err)
@@ -225,7 +342,6 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "Code sent to your Duke Energy email. "
                         "Enter it below (check spam). Code expires in a few minutes."
                     )
-                    # Re-show form so user can enter the code
                     return self.async_show_form(
                         step_id="mfa",
                         data_schema=self._mfa_schema(),
@@ -234,7 +350,12 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
             else:
                 try:
-                    await _mfa_complete(self.hass, self._worker, code)
+                    await _mfa_complete(
+                        self.hass,
+                        self._worker,
+                        code,
+                        use_passkey=use_passkey,
+                    )
                 except ValueError as err:
                     _LOGGER.warning("MFA verify failed: %s", err)
                     errors["base"] = "invalid_mfa_code"
@@ -242,11 +363,14 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 else:
                     return await self._async_finish(web_mfa_ok=True)
 
-        # First display: auto-request a code once
         if user_input is None and not self._mfa_hint:
             try:
                 result = await _mfa_start(
-                    self.hass, self._worker, self._email, self._password
+                    self.hass,
+                    self._worker,
+                    self._email,
+                    self._password,
+                    use_passkey=use_passkey,
                 )
                 if result.get("status") == "already_authenticated":
                     return await self._async_finish(web_mfa_ok=True)
@@ -283,6 +407,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_WORKER_URL: self._worker,
             WEB_MFA_OK_KEY: web_mfa_ok,
         }
+        options = {**default_options(), **self._options}
         if web_mfa_ok:
             self.hass.async_create_task(
                 self.hass.services.async_call(
@@ -295,10 +420,12 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_update_reload_and_abort(
                 self._reauth_entry,
                 data_updates=data,
+                options=options,
             )
         return self.async_create_entry(
             title=f"Duke Energy ({self._email})",
             data=data,
+            options=options,
         )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
@@ -312,6 +439,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._worker = (
             entry.data.get(CONF_WORKER_URL) or await _async_default_worker_url(self.hass)
         ).rstrip("/")
+        self._options = {**default_options(), **(entry.options or {})}
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -358,12 +486,13 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Reconfigure credentials, then MFA again."""
+        """Reconfigure credentials, then preferences, then MFA."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         default_worker = entry.data.get(CONF_WORKER_URL) or await _async_default_worker_url(
             self.hass
         )
+        self._options = {**default_options(), **(entry.options or {})}
 
         if user_input is not None:
             email = user_input[CONF_EMAIL].strip()
@@ -386,7 +515,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ).strip()
                 self._worker = worker
                 self._mfa_hint = ""
-                return await self.async_step_mfa()
+                return await self.async_step_preferences()
 
         return self.async_show_form(
             step_id="reconfigure",
@@ -418,7 +547,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class DukeScraperOptionsFlow(config_entries.OptionsFlow):
-    """Options: update password and/or reopen MFA."""
+    """Options: preferences and/or credentials + MFA."""
 
     def __init__(self) -> None:
         self._password: str | None = None
@@ -431,7 +560,30 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        return await self.async_step_credentials(user_input)
+        """Choose preferences or credentials."""
+        if user_input is not None:
+            if user_input.get("next") == "credentials":
+                return await self.async_step_credentials()
+            return await self.async_step_preferences()
+
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["preferences", "credentials"],
+        )
+
+    async def async_step_preferences(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        entry = self.config_entry
+        current = {**default_options(), **(entry.options or {})}
+        if user_input is not None:
+            options = _normalize_preferences(user_input)
+            return self.async_create_entry(title="", data=options)
+
+        return self.async_show_form(
+            step_id="preferences",
+            data_schema=_preferences_schema(current),
+        )
 
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
@@ -456,7 +608,6 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
             else:
                 self._password = password
                 self._worker = worker
-                # Persist password/worker even before MFA completes
                 self.hass.config_entries.async_update_entry(
                     entry,
                     data={
@@ -498,16 +649,25 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
             or entry.data.get(CONF_WORKER_URL)
             or await _async_default_worker_url(self.hass)
         ).rstrip("/")
+        use_passkey = bool(option(entry, CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY))
 
         if user_input is not None:
             request_code = bool(user_input.get(CONF_REQUEST_CODE))
             code = (user_input.get(CONF_MFA_CODE) or "").strip()
             skip = bool(user_input.get("skip_mfa"))
             if skip:
-                return self.async_create_entry(title="", data={})
+                return self.async_create_entry(
+                    title="", data={**default_options(), **(entry.options or {})}
+                )
             if request_code or not code:
                 try:
-                    result = await _mfa_start(self.hass, worker, email, password)
+                    result = await _mfa_start(
+                        self.hass,
+                        worker,
+                        email,
+                        password,
+                        use_passkey=use_passkey,
+                    )
                 except ValueError as err:
                     errors["base"] = "mfa_request_failed"
                     self._mfa_hint = str(err)
@@ -517,13 +677,18 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
                             entry,
                             data={**entry.data, WEB_MFA_OK_KEY: True},
                         )
-                        return self.async_create_entry(title="", data={})
+                        return self.async_create_entry(
+                            title="",
+                            data={**default_options(), **(entry.options or {})},
+                        )
                     self._mfa_hint = (
                         "Code sent. Enter it below, or request another code."
                     )
             else:
                 try:
-                    await _mfa_complete(self.hass, worker, code)
+                    await _mfa_complete(
+                        self.hass, worker, code, use_passkey=use_passkey
+                    )
                 except ValueError as err:
                     errors["base"] = "invalid_mfa_code"
                     self._mfa_hint = str(err)
@@ -539,7 +704,10 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
                             {"notification_id": NOTIFICATION_MFA_ID},
                         )
                     )
-                    return self.async_create_entry(title="", data={})
+                    return self.async_create_entry(
+                        title="",
+                        data={**default_options(), **(entry.options or {})},
+                    )
 
         return self.async_show_form(
             step_id="mfa",

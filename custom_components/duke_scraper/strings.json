@@ -11,6 +11,17 @@
           "worker_url": "Worker URL / IP (optional)"
         }
       },
+      "preferences": {
+        "title": "Scraping preferences",
+        "description": "Choose how the worker authenticates and how often it imports usage.",
+        "data": {
+          "use_passkey": "Use worker passkey (recommended)",
+          "backfill_days": "First export history depth",
+          "interval": "Ongoing data resolution",
+          "update_minutes": "How often to poll",
+          "fetch_billing": "Fetch billing snapshot daily (rate, bill, due date)"
+        }
+      },
       "mfa": {
         "title": "Duke Energy MFA",
         "description": "{hint}",
@@ -29,7 +40,7 @@
       },
       "reconfigure": {
         "title": "Update Duke Energy credentials",
-        "description": "Update email/password, then complete MFA again.\n\n{hint}",
+        "description": "Update email/password, then complete preferences and MFA again.\n\n{hint}",
         "data": {
           "email": "Email",
           "password": "Password",
@@ -51,6 +62,24 @@
   },
   "options": {
     "step": {
+      "init": {
+        "title": "Duke Energy Scraper options",
+        "menu_options": {
+          "preferences": "Scraping preferences",
+          "credentials": "Credentials / MFA"
+        }
+      },
+      "preferences": {
+        "title": "Scraping preferences",
+        "description": "Change passkey, history depth, interval, schedule, and billing.",
+        "data": {
+          "use_passkey": "Use worker passkey (recommended)",
+          "backfill_days": "First export history depth",
+          "interval": "Ongoing data resolution",
+          "update_minutes": "How often to poll",
+          "fetch_billing": "Fetch billing snapshot daily (rate, bill, due date)"
+        }
+      },
       "credentials": {
         "title": "Duke Energy credentials",
         "description": "Account: {email}\n\nLeave password blank to keep the current one.\n\n{hint}",

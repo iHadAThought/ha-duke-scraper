@@ -11,23 +11,91 @@ CONF_WORKER_URL = "worker_url"
 CONF_MFA_CODE = "mfa_code"
 CONF_REQUEST_CODE = "request_code"
 
+# Preferences (stored in entry.options)
+CONF_USE_PASSKEY = "use_passkey"
+CONF_BACKFILL_DAYS = "backfill_days"
+CONF_INTERVAL = "interval"
+CONF_UPDATE_MINUTES = "update_minutes"
+CONF_FETCH_BILLING = "fetch_billing"
+
 # Hassio DNS does not resolve manually-started containers; deploy writes
 # /config/.duke_scraper/worker_url with the current hassio-network IP.
 DEFAULT_WORKER_URL = "http://172.30.33.4:8765"
 WORKER_URL_FILE = "worker_url"
 DEFAULT_METER_SERIAL = "325385805"
 
-# First-run backfill window (hourly for all available data in these years)
+# First-run backfill year caps when backfill_days == "max"
 BACKFILL_START_YEAR = 2025
 BACKFILL_END_YEAR = 2026
 
-# Ongoing polls: ~6 hours with random jitter (see coordinator).
-UPDATE_INTERVAL_HOURS = 6
-UPDATE_JITTER_MINUTES = 45
+# Defaults / legacy fallbacks
+DEFAULT_USE_PASSKEY = True
+DEFAULT_BACKFILL_DAYS = "max"
+DEFAULT_INTERVAL = "fifteen_minute"
+DEFAULT_UPDATE_MINUTES = 120
+DEFAULT_FETCH_BILLING = True
 LOOKBACK_DAYS = 7
+
+BACKFILL_DAY_CHOICES: dict[str, str] = {
+    "7": "Last 7 days",
+    "30": "Last 30 days",
+    "90": "Last 90 days",
+    "365": "Last 1 year",
+    "max": "Max available",
+}
+
+INTERVAL_CHOICES: dict[str, str] = {
+    "fifteen_minute": "15 minutes",
+    "hourly": "1 hour",
+    "daily": "1 day",
+}
+
+UPDATE_MINUTE_CHOICES: dict[int, str] = {
+    30: "Every 30 minutes",
+    60: "Every 1 hour",
+    120: "Every 2 hours",
+    360: "Every 6 hours",
+    720: "Every 12 hours",
+    1440: "Every 1 day",
+    10080: "Every 7 days",
+    20160: "Every 14 days",
+    43200: "Every 30 days",
+}
 
 DATA_DIR_NAME = ".duke_scraper"
 STORAGE_STATE_NAME = "storage_state.json"
 BACKFILL_DONE_KEY = "backfill_done"
 WEB_MFA_OK_KEY = "web_mfa_ok"
 NOTIFICATION_MFA_ID = "duke_scraper_mfa_required"
+
+# Billing cache keys mirrored from worker /billing
+BILLING_ATTR_RATE = "energy_rate_usd_per_kwh"
+BILLING_ATTR_CURRENT = "current_bill_usd"
+BILLING_ATTR_ESTIMATED = "estimated_bill_usd"
+BILLING_ATTR_DUE = "bill_due_date"
+BILLING_ATTR_STATUS = "billing_status"
+BILLING_ATTR_PAST_DUE = "past_due"
+BILLING_ATTR_MESSAGE = "billing_message"
+BILLING_ATTR_FETCHED = "fetched_at"
+
+
+def default_options() -> dict:
+    """Default entry.options for new and migrated installs."""
+    return {
+        CONF_USE_PASSKEY: DEFAULT_USE_PASSKEY,
+        CONF_BACKFILL_DAYS: DEFAULT_BACKFILL_DAYS,
+        CONF_INTERVAL: DEFAULT_INTERVAL,
+        CONF_UPDATE_MINUTES: DEFAULT_UPDATE_MINUTES,
+        CONF_FETCH_BILLING: DEFAULT_FETCH_BILLING,
+    }
+
+
+def option(entry, key: str, default=None):
+    """Read a preference from entry.options with fallback to defaults."""
+    opts = entry.options or {}
+    if key in opts:
+        return opts[key]
+    defaults = default_options()
+    if default is not None:
+        return defaults.get(key, default)
+    return defaults.get(key)

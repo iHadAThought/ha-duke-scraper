@@ -1,12 +1,13 @@
 {
   "domain": "duke_scraper",
   "name": "Duke Energy Scraper",
-  "codeowners": [],
+  "codeowners": ["@iHadAThought"],
   "config_flow": true,
   "dependencies": ["recorder"],
-  "documentation": "https://bookstack.ghostnetwork.app",
+  "documentation": "https://github.com/iHadAThought/ha-duke-scraper",
+  "issue_tracker": "https://github.com/iHadAThought/ha-duke-scraper/issues",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "requirements": ["aiohttp"],
-  "version": "1.1.2"
+  "version": "1.2.0"
 }
