@@ -1,0 +1,12 @@
+{
+  "domain": "duke_scraper",
+  "name": "Duke Energy Scraper",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://bookstack.ghostnetwork.app",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": ["aiohttp"],
+  "version": "1.1.2"
+}

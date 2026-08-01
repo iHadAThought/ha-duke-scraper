@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Duke Energy Scraper",
+        "description": "Enter your Duke Energy My Account email and password. Optional: meter serial and worker URL/IP.\n\n{hint}",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "meter_serial": "Meter serial (optional)",
+          "worker_url": "Worker URL / IP (optional)"
+        }
+      },
+      "mfa": {
+        "title": "Duke Energy MFA",
+        "description": "{hint}",
+        "data": {
+          "mfa_code": "MFA code from email",
+          "request_code": "Request code (send email)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Duke Energy",
+        "description": "Confirm the password for {email}, then you will enter an MFA code.\n\n{hint}",
+        "data": {
+          "password": "Password",
+          "worker_url": "Worker URL / IP (optional)"
+        }
+      },
+      "reconfigure": {
+        "title": "Update Duke Energy credentials",
+        "description": "Update email/password, then complete MFA again.\n\n{hint}",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "meter_serial": "Meter serial (optional)",
+          "worker_url": "Worker URL / IP (optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Login failed: {hint}",
+      "mfa_request_failed": "Could not send MFA code: {hint}",
+      "invalid_mfa_code": "Invalid or expired MFA code: {hint}"
+    },
+    "abort": {
+      "already_configured": "This Duke Energy account is already configured",
+      "reconfigure_successful": "Credentials updated",
+      "reauth_successful": "MFA completed; scraping will resume"
+    }
+  },
+  "options": {
+    "step": {
+      "credentials": {
+        "title": "Duke Energy credentials",
+        "description": "Account: {email}\n\nLeave password blank to keep the current one.\n\n{hint}",
+        "data": {
+          "password": "Password (leave blank to keep)",
+          "worker_url": "Worker URL / IP (optional)"
+        }
+      },
+      "mfa": {
+        "title": "Duke Energy MFA",
+        "description": "{hint}",
+        "data": {
+          "mfa_code": "MFA code from email",
+          "request_code": "Request code (send email)",
+          "skip_mfa": "Skip MFA (password-only update)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Login failed: {hint}",
+      "mfa_request_failed": "Could not send MFA code: {hint}",
+      "invalid_mfa_code": "Invalid or expired MFA code: {hint}"
+    }
+  }
+}
