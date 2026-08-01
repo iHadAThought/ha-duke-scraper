@@ -1,0 +1,37 @@
+# Example Compose stack for Home Assistant Container + Duke scraper worker.
+# Adjust the HA service and volume paths to match your install.
+#
+#   docker compose build duke_scraper_worker
+#   docker compose up -d duke_scraper_worker
+#   Integration Worker URL: http://duke_scraper_worker:8765
+
+services:
+  duke_scraper_worker:
+    build: ./worker
+    image: duke_scraper_worker:local
+    container_name: duke_scraper_worker
+    restart: unless-stopped
+    environment:
+      DUKE_SCRAPER_DATA: /data
+      DUKE_SCRAPER_HOST: "0.0.0.0"
+      DUKE_SCRAPER_PORT: "8765"
+      TZ: America/New_York
+    volumes:
+      # Prefer the same host directory you use for HA /config:
+      #   - /path/to/ha/config/.duke_scraper:/data
+      - duke_scraper_data:/data
+    # Uncomment to reach the worker from the LAN / host:
+    # ports:
+    #   - "8765:8765"
+    networks:
+      - ha
+
+volumes:
+  duke_scraper_data:
+
+networks:
+  ha:
+    name: ha
+    # If Home Assistant already has a network, use:
+    # external: true
+    # name: your_existing_network_name
