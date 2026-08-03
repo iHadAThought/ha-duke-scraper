@@ -225,29 +225,99 @@ Duke often **skips** offering a second passkey if one already exists. The worker
 ### 1. Prefer the website UI
 
 1. Sign in at [Duke Energy My Account](https://www.duke-energy.com/my-account)
-2. **Settings → Profile → Passkeys** (wording may vary)
+2. Open **Settings → Profile → Passkeys**, or go directly to  
+   https://www.duke-energy.com/my-account/settings/profile/passkeys
 3. Look for **Remove** / **Revoke** and remove the existing passkey
 4. In HA, Configure / MFA with **Use worker passkey** enabled so the worker can click **Create Passkey**
 5. Optionally add your phone passkey again if Duke allows multiple
 
 ### 2. If Remove is missing (advanced — proceed at your own risk)
 
-When only one passkey exists, Duke’s UI may hide Remove. Some accounts can revoke via browser DevTools against My Account APIs.
+When only one passkey exists, Duke’s UI may hide Remove. You can revoke via the browser console against My Account’s CIAM API.
 
 **Warnings**
 
 - Undocumented APIs; may change without notice
 - Revoking your only passkey can break passkey sign-in until you enroll again
 - You are responsible for anything you run in the browser console on duke-energy.com
+- Never commit or share your live `cdxp-session` value (it is a session secret)
 
-**High-level steps**
+**Exact steps**
 
-1. Sign in, open DevTools → Network, reload Passkeys settings
-2. Note session headers such as `cdxp-session` and `authorization: MyAccount`
-3. Call the list/revoke endpoints that page uses (often under a `cdxp` / CIAM `revoke-passkey` path)
-4. Confirm removal in the UI, enroll the **worker** passkey via HA MFA, then re-add a phone passkey if desired
+1. Use a normal browser window (Chrome/Firefox preferred over Safari with content blockers).
+2. Sign in and open  
+   https://www.duke-energy.com/my-account/settings/profile/passkeys  
+   Confirm the Passkeys page loads (not a login redirect).
+3. Open DevTools → **Network**, filter `idp-data`, reload the page.
+4. Click the `idp-data` request that returns **200**.
+5. In Request Headers, copy the `cdxp-session` value.
+6. Open the **Console** tab on that same Passkeys page.
+7. Paste the script below, replace `PASTE_CDXP_SESSION_HERE` with your copied value, then run it.
+8. Expect `list status 200`, revoke lines with `200`, and `after []` (or no passkeys).
+9. Refresh the Passkeys page to confirm removal.
+10. In HA, Configure / MFA with **Use worker passkey** enabled so the worker can **Create Passkey**, then optionally re-add your phone passkey.
 
-If you prefer not to do that, leave **Use worker passkey** off and complete MFA when HA notifies you (~30-day web session).
+**Console script (replace the session placeholder)**
+
+```javascript
+(async () => {
+  const headers = {
+    authorization: "MyAccount",
+    "cdxp-session": "PASTE_CDXP_SESSION_HERE",
+    "content-type": "application/json",
+    accept: "*/*",
+  };
+
+  const idp = await fetch("https://www.duke-energy.com/cdxp/api/core/ciam/idp-data", {
+    method: "GET",
+    credentials: "include",
+    headers,
+  });
+  const idpJson = await idp.json();
+  console.log("list status", idp.status);
+  const passkeys = idpJson?.data?.Passkeys || [];
+  console.log("passkeys", passkeys);
+
+  if (idp.status !== 200) {
+    console.log(
+      "Session expired or unauthorized. Reload Passkeys, copy a fresh cdxp-session from Network, and update the header."
+    );
+    return;
+  }
+
+  for (const pk of passkeys) {
+    const r = await fetch(
+      "https://www.duke-energy.com/cdxp/api/core/ciam/revoke-passkey",
+      {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({ keyId: pk.Id }),
+      }
+    );
+    console.log("revoked", pk.Id, pk.Platform, r.status, await r.text());
+  }
+
+  const afterResp = await fetch(
+    "https://www.duke-energy.com/cdxp/api/core/ciam/idp-data",
+    {
+      method: "GET",
+      credentials: "include",
+      headers,
+    }
+  );
+  const after = await afterResp.json();
+  console.log("after", after?.data?.Passkeys);
+})();
+```
+
+**If you get `401`**
+
+- You are missing a fresh `cdxp-session` (required; `authorization: MyAccount` alone is not enough).
+- Reload the Passkeys page, copy `cdxp-session` again from the successful `idp-data` request, and rerun.
+- Or right‑click that `idp-data` request → **Copy** → **Copy as fetch** to confirm a working authenticated call first.
+
+If you prefer not to do any of this, leave **Use worker passkey** off and complete MFA when HA notifies you (~30-day web session).
 
 ---
 
@@ -281,8 +351,8 @@ docker logs -f duke_scraper_worker
 
 ## License
 
-[MIT](LICENSE) — © 2026 Brendan Mahoney.
+[MIT](LICENSE) — © 2026 iHadAThought.
 
 Not an official Duke Energy or Home Assistant product. Provided as-is.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](.github/SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md).
