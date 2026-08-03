@@ -242,9 +242,13 @@ When only one passkey exists, Duke’s UI may hide Remove. You can revoke via th
 - You are responsible for anything you run in the browser console on duke-energy.com
 - Never commit or share your live `cdxp-session` value (it is a session secret)
 
+**Browser requirement**
+
+**Safari often fails** for this flow (content blockers / stricter cookie handling can cause `401` on `idp-data`). Use **Firefox** or **Chrome** in a normal (non-private) window.
+
 **Exact steps**
 
-1. Use a normal browser window (Chrome/Firefox preferred over Safari with content blockers).
+1. Open **Firefox** or **Chrome** (not Safari).
 2. Sign in and open  
    https://www.duke-energy.com/my-account/settings/profile/passkeys  
    Confirm the Passkeys page loads (not a login redirect).
@@ -313,6 +317,7 @@ When only one passkey exists, Duke’s UI may hide Remove. You can revoke via th
 
 **If you get `401`**
 
+- Switch to **Firefox** or **Chrome** if you are on Safari.
 - You are missing a fresh `cdxp-session` (required; `authorization: MyAccount` alone is not enough).
 - Reload the Passkeys page, copy `cdxp-session` again from the successful `idp-data` request, and rerun.
 - Or right‑click that `idp-data` request → **Copy** → **Copy as fetch** to confirm a working authenticated call first.
