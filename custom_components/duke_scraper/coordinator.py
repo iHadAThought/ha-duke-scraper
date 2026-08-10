@@ -27,8 +27,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import EnergyConverter
 
-from pathlib import Path
-
 from .const import (
     BACKFILL_DONE_KEY,
     BACKFILL_END_YEAR,
@@ -41,19 +39,22 @@ from .const import (
     CONF_UPDATE_MINUTES,
     CONF_USE_PASSKEY,
     CONF_WORKER_URL,
-    DATA_DIR_NAME,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_INTERVAL,
     DEFAULT_METER_SERIAL,
     DEFAULT_UPDATE_MINUTES,
     DEFAULT_USE_PASSKEY,
-    DEFAULT_WORKER_URL,
     DOMAIN,
     LOOKBACK_DAYS,
     NOTIFICATION_MFA_ID,
     WEB_MFA_OK_KEY,
-    WORKER_URL_FILE,
     option,
+)
+from .worker_url import (
+    async_resolve_worker_url,
+    entry_has_sticky_ipv4,
+    is_ipv4_worker_url,
+    normalize_worker_base,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +84,6 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
         )
         self.entry = entry
         self._statistic_ids: set[str] = set()
-        self._worker_url_cache: str | None = None
 
         @callback
         def _dummy_listener() -> None:
@@ -102,21 +102,32 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
     def statistic_id(self) -> str:
         return f"{DOMAIN}:electric_{self.meter_serial}_energy_consumption"
 
-    def _resolve_worker_url(self) -> str:
-        configured = (self.entry.data.get(CONF_WORKER_URL) or "").strip()
-        if configured:
-            return configured.rstrip("/")
-        url_file = Path(self.hass.config.path(DATA_DIR_NAME)) / WORKER_URL_FILE
-        if url_file.is_file():
-            return url_file.read_text(encoding="utf-8").strip().rstrip("/")
-        return DEFAULT_WORKER_URL.rstrip("/")
-
     async def _async_worker_url(self) -> str:
-        if self._worker_url_cache:
-            return self._worker_url_cache
-        url = await self.hass.async_add_executor_job(self._resolve_worker_url)
-        self._worker_url_cache = url
-        return url
+        """Resolve a reachable worker base for this refresh cycle."""
+        try:
+            return await async_resolve_worker_url(self.hass, self.entry)
+        except ValueError as err:
+            raise UpdateFailed(str(err)) from err
+
+    def _maybe_clear_sticky_worker_ip(self, working_url: str) -> None:
+        """Drop sticky IPv4 from entry data once a healthier URL wins."""
+        if not entry_has_sticky_ipv4(self.entry):
+            return
+        configured = normalize_worker_base(
+            self.entry.data.get(CONF_WORKER_URL) or ""
+        )
+        working = normalize_worker_base(working_url)
+        if configured == working:
+            return
+        if not is_ipv4_worker_url(configured):
+            return
+        _LOGGER.info(
+            "Clearing sticky worker IP %s (now using %s)", configured, working
+        )
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={**self.entry.data, CONF_WORKER_URL: ""},
+        )
 
     async def _async_update_data(self) -> dict[str, Any] | None:
         """Fetch usage and insert statistics."""
@@ -180,13 +191,14 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
             mode = "incremental"
             fetch_interval = interval
 
+        worker_base = await self._async_worker_url()
         _LOGGER.info(
             "Duke scraper %s (%s) fetch %s → %s via %s",
             mode,
             fetch_interval,
             start.date(),
             end.date(),
-            await self._async_worker_url(),
+            worker_base,
         )
 
         session = async_get_clientsession(self.hass)
@@ -203,7 +215,7 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
             total=60 * 45 if mode == "backfill" else 60 * 15
         )
         async with session.post(
-            f"{await self._async_worker_url()}/export", json=payload, timeout=timeout
+            f"{worker_base}/export", json=payload, timeout=timeout
         ) as resp:
             body = await resp.json(content_type=None)
             if resp.status == 401 or body.get("error_code") == "mfa_required":
@@ -216,6 +228,8 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
                 if "mfa" in err.lower() or "web session" in err.lower():
                     await self._async_handle_mfa_required(err)
                 raise UpdateFailed(err)
+
+        self._maybe_clear_sticky_worker_ip(worker_base)
 
         rows: dict[datetime, float] = {}
         result_interval = str(body.get("interval") or fetch_interval)

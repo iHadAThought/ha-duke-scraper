@@ -119,20 +119,29 @@ docker run -d \
   -e TZ=America/New_York \
   duke_scraper_worker:local
 
-# Discover the container IP on the hassio network and save it for HA
-IP=$(docker inspect duke_scraper_worker \
-  --format '{{(index .NetworkSettings.Networks "hassio").IPAddress}}')
-echo -n "http://${IP}:8765" > /config/.duke_scraper/worker_url
+# Worker writes /config/.duke_scraper/worker_url on start (hassio IP).
+# Leave Worker URL blank in the integration for auto-discovery.
+docker run -d \
+  --name duke_scraper_worker \
+  --restart unless-stopped \
+  --network hassio \
+  --network-alias duke_scraper_worker \
+  -v /config/.duke_scraper:/data \
+  -e DUKE_SCRAPER_DATA=/data \
+  -e TZ=America/New_York \
+  duke_scraper_worker:local
+
+sleep 3
 echo "worker_url=$(cat /config/.duke_scraper/worker_url)"
-curl -s "http://${IP}:8765/health"
+curl -s "$(cat /config/.duke_scraper/worker_url)/health"
 ```
 
 Expected health JSON includes `"playwright_ready": true`.
 
 **Notes for HAOS**
 
-- Attach to the **`hassio`** network so Core can reach the container. Hassio DNS often does **not** resolve manually started containers, so saving `worker_url` (or pasting the URL in the integration) is important.
-- After a container recreate, the IP may change — re-run the `docker inspect` + `worker_url` lines (or update the Worker URL in the integration).
+- Attach to the **`hassio`** network so Core can reach the container. Hassio DNS often does **not** resolve manually started containers; the worker writes its current IP to `worker_url` on every start.
+- Leave **Worker URL** blank in the integration for **auto** discovery (reads `worker_url`, then tries known hostnames). Sticky IPs in the config entry are cleared automatically when a fresher URL works.
 - Time zone: set `TZ` to your Duke billing timezone (often `America/New_York`).
 
 ### Home Assistant Container / Docker Compose
@@ -156,6 +165,7 @@ services:
       DUKE_SCRAPER_DATA: /data
       DUKE_SCRAPER_HOST: "0.0.0.0"
       DUKE_SCRAPER_PORT: "8765"
+      DUKE_SCRAPER_ADVERTISE_HOST: duke_scraper_worker
       TZ: America/New_York
     volumes:
       # Use the same host path you mount as HA /config, plus .duke_scraper
@@ -178,7 +188,7 @@ docker compose up -d duke_scraper_worker
 curl -s http://duke_scraper_worker:8765/health   # from another container on `ha`
 ```
 
-In the integration, set **Worker URL** to:
+Leave **Worker URL** blank for auto-discovery, or set:
 
 `http://duke_scraper_worker:8765`
 
@@ -186,7 +196,7 @@ In the integration, set **Worker URL** to:
 
 ### Home Assistant Supervised / generic Linux Docker
 
-Same as Container: build `./worker`, run with a volume for data, put HA and the worker on one Docker network, point the integration at `http://<name-or-ip>:8765`.
+Same as Container: build `./worker`, run with a volume for data, put HA and the worker on one Docker network. Leave Worker URL blank unless you need an explicit override.
 
 ### Quick health check
 
@@ -204,7 +214,7 @@ Useful flags: `playwright_ready`, `web_state`, `passkey_enrolled`, `mfa_pending`
 1. Confirm the worker is healthy (above).
 2. **Settings → Devices & services → Add integration → Duke Energy Scraper**
 3. Enter Duke **email** / **password**
-4. Optional: meter serial, **Worker URL** (defaults to `/config/.duke_scraper/worker_url` if present)
+4. Optional: meter serial; leave **Worker URL** blank for auto (file + DNS), or set an explicit hostname override
 5. Preferences:
    - Use worker passkey
    - First export history depth
@@ -336,7 +346,7 @@ If you prefer not to do any of this, leave **Use worker passkey** off and comple
 
 - `docker ps` shows `duke_scraper_worker` running
 - `curl "$(cat /config/.duke_scraper/worker_url)/health"` (or your Worker URL) returns JSON
-- After recreate, refresh `worker_url` / integration Worker URL (IP may change on `hassio`)
+- After recreate, confirm the worker rewrote `worker_url` (check logs for `Wrote worker_url`) — leave the integration Worker URL blank for auto-discovery
 
 ### MFA required
 

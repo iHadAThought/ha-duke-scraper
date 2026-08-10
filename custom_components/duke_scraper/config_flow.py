@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -26,33 +25,36 @@ from .const import (
     CONF_UPDATE_MINUTES,
     CONF_USE_PASSKEY,
     CONF_WORKER_URL,
-    DATA_DIR_NAME,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_INTERVAL,
     DEFAULT_METER_SERIAL,
     DEFAULT_UPDATE_MINUTES,
     DEFAULT_USE_PASSKEY,
-    DEFAULT_WORKER_URL,
     DOMAIN,
     INTERVAL_CHOICES,
     NOTIFICATION_MFA_ID,
     UPDATE_MINUTE_CHOICES,
     WEB_MFA_OK_KEY,
-    WORKER_URL_FILE,
     default_options,
     option,
+)
+from .worker_url import (
+    async_probe_worker,
+    normalize_worker_base,
+    read_worker_url_file,
+    should_persist_worker_url,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def _default_worker_url(hass: HomeAssistant | None = None) -> str:
-    """Sync helper — only call from executor / non-loop contexts."""
+    """Sync helper — display default for forms (file or blank for auto)."""
     if hass is not None:
-        url_file = Path(hass.config.path(DATA_DIR_NAME)) / WORKER_URL_FILE
-        if url_file.is_file():
-            return url_file.read_text(encoding="utf-8").strip().rstrip("/")
-    return DEFAULT_WORKER_URL
+        file_url = read_worker_url_file(hass)
+        if file_url:
+            return file_url
+    return ""
 
 
 async def _async_default_worker_url(hass: HomeAssistant) -> str:
@@ -67,7 +69,7 @@ async def _worker_post(
     timeout: int = 120,
 ) -> dict[str, Any]:
     session = async_get_clientsession(hass)
-    base = worker_url.rstrip("/")
+    base = normalize_worker_base(worker_url)
     async with session.post(
         f"{base}{path}",
         json=payload,
@@ -83,24 +85,13 @@ async def _validate_api_login(
     hass: HomeAssistant, worker_url: str, email: str, password: str
 ) -> dict[str, Any]:
     """Hit worker health + Auth0/CMA token validate (not web MFA)."""
-    session = async_get_clientsession(hass)
-    base = worker_url.rstrip("/")
-    try:
-        async with session.get(
-            f"{base}/health", timeout=aiohttp.ClientTimeout(total=15)
-        ) as resp:
-            if resp.status != 200:
-                raise ValueError(f"Worker health returned HTTP {resp.status}")
-            health = await resp.json()
-    except aiohttp.ClientError as err:
-        raise ValueError(
-            f"Cannot reach scraper worker at {base}. "
-            "Is the duke_scraper_worker container running on the hassio network?"
-        ) from err
-
-    if not health.get("playwright_ready"):
-        raise ValueError("Worker is up but Playwright/Chromium is not ready yet")
-
+    base = normalize_worker_base(worker_url)
+    await async_probe_worker(
+        hass,
+        base,
+        require_playwright=True,
+        timeout=aiohttp.ClientTimeout(total=15),
+    )
     return await _worker_post(
         hass,
         worker_url,
@@ -112,22 +103,12 @@ async def _validate_api_login(
 
 async def _ensure_worker_reachable(hass: HomeAssistant, worker_url: str) -> None:
     """Fast check used when updating password (skip slow Auth0 validate)."""
-    session = async_get_clientsession(hass)
-    base = worker_url.rstrip("/")
-    try:
-        async with session.get(
-            f"{base}/health", timeout=aiohttp.ClientTimeout(total=10)
-        ) as resp:
-            if resp.status != 200:
-                raise ValueError(f"Worker health returned HTTP {resp.status}")
-            health = await resp.json()
-    except aiohttp.ClientError as err:
-        raise ValueError(
-            f"Cannot reach scraper worker at {base}. "
-            "Is the duke_scraper_worker container running on the hassio network?"
-        ) from err
-    if not health.get("playwright_ready"):
-        raise ValueError("Worker is up but Playwright/Chromium is not ready yet")
+    await async_probe_worker(
+        hass,
+        worker_url,
+        require_playwright=True,
+        timeout=aiohttp.ClientTimeout(total=10),
+    )
 
 
 async def _mfa_start(
@@ -239,7 +220,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._email: str = ""
         self._password: str = ""
         self._meter: str = DEFAULT_METER_SERIAL
-        self._worker: str = DEFAULT_WORKER_URL
+        self._worker: str = ""
         self._mfa_hint: str = ""
         self._options: dict[str, Any] = default_options()
         self._reauth_entry: config_entries.ConfigEntry | None = None
@@ -256,23 +237,32 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(email.lower())
             self._abort_if_unique_id_configured()
 
-            worker = (user_input.get(CONF_WORKER_URL) or default_worker).rstrip("/")
-            try:
-                await _validate_api_login(
-                    self.hass, worker, email, user_input[CONF_PASSWORD]
-                )
-            except ValueError as err:
-                _LOGGER.warning("Duke scraper validation failed: %s", err)
+            worker = normalize_worker_base(
+                user_input.get(CONF_WORKER_URL) or default_worker
+            )
+            if not worker:
                 errors["base"] = "cannot_connect"
-                self.context["last_error"] = str(err)
+                self.context["last_error"] = (
+                    "No worker URL available. Start the Duke scraper worker "
+                    "(writes /config/.duke_scraper/worker_url) or enter a URL."
+                )
             else:
-                self._email = email
-                self._password = user_input[CONF_PASSWORD]
-                self._meter = (
-                    user_input.get(CONF_METER_SERIAL) or DEFAULT_METER_SERIAL
-                ).strip()
-                self._worker = worker
-                return await self.async_step_preferences()
+                try:
+                    await _validate_api_login(
+                        self.hass, worker, email, user_input[CONF_PASSWORD]
+                    )
+                except ValueError as err:
+                    _LOGGER.warning("Duke scraper validation failed: %s", err)
+                    errors["base"] = "cannot_connect"
+                    self.context["last_error"] = str(err)
+                else:
+                    self._email = email
+                    self._password = user_input[CONF_PASSWORD]
+                    self._meter = (
+                        user_input.get(CONF_METER_SERIAL) or DEFAULT_METER_SERIAL
+                    ).strip()
+                    self._worker = worker
+                    return await self.async_step_preferences()
 
         return self.async_show_form(
             step_id="user",
@@ -396,7 +386,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_EMAIL: self._email,
             CONF_PASSWORD: self._password,
             CONF_METER_SERIAL: self._meter,
-            CONF_WORKER_URL: self._worker,
+            CONF_WORKER_URL: should_persist_worker_url(self.hass, self._worker),
             WEB_MFA_OK_KEY: web_mfa_ok,
         }
         options = {**default_options(), **self._options}
@@ -428,9 +418,9 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._email = entry.data[CONF_EMAIL]
         self._password = entry.data[CONF_PASSWORD]
         self._meter = entry.data.get(CONF_METER_SERIAL) or DEFAULT_METER_SERIAL
-        self._worker = (
+        self._worker = normalize_worker_base(
             entry.data.get(CONF_WORKER_URL) or await _async_default_worker_url(self.hass)
-        ).rstrip("/")
+        )
         self._options = {**default_options(), **(entry.options or {})}
         return await self.async_step_reauth_confirm()
 
@@ -443,9 +433,9 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             password = user_input[CONF_PASSWORD]
-            worker = (
+            worker = normalize_worker_base(
                 user_input.get(CONF_WORKER_URL) or self._worker
-            ).rstrip("/")
+            )
             try:
                 await _ensure_worker_reachable(self.hass, worker)
             except ValueError as err:
@@ -481,14 +471,17 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Reconfigure credentials, then preferences, then MFA."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
-        default_worker = entry.data.get(CONF_WORKER_URL) or await _async_default_worker_url(
-            self.hass
+        default_worker = normalize_worker_base(
+            entry.data.get(CONF_WORKER_URL)
+            or await _async_default_worker_url(self.hass)
         )
         self._options = {**default_options(), **(entry.options or {})}
 
         if user_input is not None:
             email = user_input[CONF_EMAIL].strip()
-            worker = (user_input.get(CONF_WORKER_URL) or default_worker).rstrip("/")
+            worker = normalize_worker_base(
+                user_input.get(CONF_WORKER_URL) or default_worker
+            )
             try:
                 await _validate_api_login(
                     self.hass, worker, email, user_input[CONF_PASSWORD]
@@ -582,16 +575,18 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         errors: dict[str, str] = {}
         entry = self.config_entry
-        default_worker = (
+        default_worker = normalize_worker_base(
             entry.data.get(CONF_WORKER_URL)
             or await _async_default_worker_url(self.hass)
-        ).rstrip("/")
+        )
 
         if user_input is not None:
             password = (user_input.get(CONF_PASSWORD) or "").strip()
             if not password:
                 password = entry.data[CONF_PASSWORD]
-            worker = (user_input.get(CONF_WORKER_URL) or default_worker).rstrip("/")
+            worker = normalize_worker_base(
+                user_input.get(CONF_WORKER_URL) or default_worker
+            )
             try:
                 await _ensure_worker_reachable(self.hass, worker)
             except ValueError as err:
@@ -605,7 +600,7 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
                     data={
                         **entry.data,
                         CONF_PASSWORD: password,
-                        CONF_WORKER_URL: worker,
+                        CONF_WORKER_URL: should_persist_worker_url(self.hass, worker),
                     },
                 )
                 self._mfa_hint = (
@@ -636,11 +631,11 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
         entry = self.config_entry
         email = entry.data[CONF_EMAIL]
         password = self._password or entry.data[CONF_PASSWORD]
-        worker = (
+        worker = normalize_worker_base(
             self._worker
             or entry.data.get(CONF_WORKER_URL)
             or await _async_default_worker_url(self.hass)
-        ).rstrip("/")
+        )
         use_passkey = bool(option(entry, CONF_USE_PASSKEY, DEFAULT_USE_PASSKEY))
 
         if user_input is not None:

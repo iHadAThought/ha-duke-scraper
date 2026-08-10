@@ -2,7 +2,9 @@
 
 ## 1.0.1
 
-- New Home Assistant–style brand icon and logo (house + energy swooshes)
+- Worker publishes `worker_url` on every start (IP or advertise host) so HA survives hassio IP drift
+- Integration auto-discovers worker via file + hostnames + `/health` probe
+- New Home Assistant–style brand icon and logo (Duke ↔ HA sync mark)
 
 ## 1.0.0
 

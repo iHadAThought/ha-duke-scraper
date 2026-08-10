@@ -80,6 +80,58 @@ def _ensure_dirs() -> None:
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _publish_worker_url() -> None:
+    """Write http://host:port to DATA_DIR/worker_url for HA auto-discovery.
+
+    Prefer DUKE_SCRAPER_ADVERTISE_HOST, then Supervisor add-on hostname, then
+    the first non-loopback IPv4 (hassio bridge IP for lab containers).
+    """
+    port = PORT
+    host = (os.environ.get("DUKE_SCRAPER_ADVERTISE_HOST") or "").strip()
+
+    if not host and os.environ.get("SUPERVISOR_TOKEN"):
+        try:
+            req = urllib.request.Request(
+                "http://supervisor/addons/self/info",
+                headers={
+                    "Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}"
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.load(resp).get("data") or {}
+            raw = str(data.get("hostname") or data.get("slug") or "")
+            host = raw.replace("_", "-")
+        except Exception as err:
+            LOG.warning("Supervisor hostname lookup failed: %s", err)
+
+    if not host:
+        try:
+            import socket
+
+            # UDP connect does not send packets; reveals the egress interface IP.
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(("1.1.1.1", 80))
+                host = sock.getsockname()[0]
+            finally:
+                sock.close()
+        except Exception as err:
+            LOG.warning("Could not detect container IP: %s", err)
+
+    if not host or host.startswith("127."):
+        host = "local-duke-scraper-worker"
+
+    url = f"http://{host}:{port}"
+    path = DATA_DIR / "worker_url"
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(url, encoding="utf-8")
+        tmp.replace(path)
+        LOG.info("Wrote worker_url -> %s", url)
+    except Exception as err:
+        LOG.warning("Failed to write worker_url: %s", err)
+
+
 def _pkce_pair() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(32)
     challenge = (
@@ -1866,6 +1918,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     global _PLAYWRIGHT_READY
     _ensure_dirs()
+    _publish_worker_url()
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(

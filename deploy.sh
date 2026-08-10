@@ -39,10 +39,13 @@ docker run -d --name duke_scraper_worker --restart unless-stopped \
   -e DUKE_SCRAPER_DATA=/data -e TZ=America/New_York \
   duke_scraper_worker:local
 sleep 4
-IP=\$(docker inspect duke_scraper_worker --format \"{{(index .NetworkSettings.Networks \\\"hassio\\\").IPAddress}}\")
-echo -n \"http://\$IP:8765\" > \"\$HA/.duke_scraper/worker_url\"
+# Worker self-publishes worker_url on start (container IP). Fall back to inspect.
+if [[ ! -s \"\$HA/.duke_scraper/worker_url\" ]]; then
+  IP=\$(docker inspect duke_scraper_worker --format \"{{(index .NetworkSettings.Networks \\\"hassio\\\").IPAddress}}\")
+  echo -n \"http://\$IP:8765\" > \"\$HA/.duke_scraper/worker_url\"
+fi
 echo worker_url=\$(cat \"\$HA/.duke_scraper/worker_url\")
-curl -s \"http://\$IP:8765/health\"
+curl -s \"\$(cat \"\$HA/.duke_scraper/worker_url\")/health\"
 echo
 docker exec hassio_cli ha core restart || true
 "'

@@ -17,9 +17,14 @@ CONF_BACKFILL_DAYS = "backfill_days"
 CONF_INTERVAL = "interval"
 CONF_UPDATE_MINUTES = "update_minutes"
 
-# Hassio DNS does not resolve manually-started containers; deploy writes
-# /config/.duke_scraper/worker_url with the current hassio-network IP.
+# Hassio DNS often fails for manually-started containers; the worker writes
+# /config/.duke_scraper/worker_url on start. Runtime discovery probes the file
+# plus these hostnames — sticky IPv4 config-entry values are not trusted alone.
 DEFAULT_WORKER_URL = "http://local-duke-scraper-worker:8765"
+WORKER_HOST_FALLBACKS: tuple[str, ...] = (
+    "local-duke-scraper-worker",
+    "duke_scraper_worker",
+)
 WORKER_URL_FILE = "worker_url"
 DEFAULT_METER_SERIAL = "325385805"
 

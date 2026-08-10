@@ -3,12 +3,12 @@
     "step": {
       "user": {
         "title": "Duke Energy Scraper",
-        "description": "Enter your Duke Energy My Account email and password. Optional: meter serial and worker URL/IP.\n\n{hint}",
+        "description": "Enter your Duke Energy My Account email and password. Optional: meter serial. Leave Worker URL blank for auto-discovery (worker_url file + DNS).\n\n{hint}",
         "data": {
           "email": "Email",
           "password": "Password",
           "meter_serial": "Meter serial (optional)",
-          "worker_url": "Worker URL / IP (optional)"
+          "worker_url": "Worker URL (optional; blank = auto)"
         }
       },
       "preferences": {
@@ -34,7 +34,7 @@
         "description": "Confirm the password for {email}, then you will enter an MFA code.\n\n{hint}",
         "data": {
           "password": "Password",
-          "worker_url": "Worker URL / IP (optional)"
+          "worker_url": "Worker URL (optional; blank = auto)"
         }
       },
       "reconfigure": {
@@ -44,7 +44,7 @@
           "email": "Email",
           "password": "Password",
           "meter_serial": "Meter serial (optional)",
-          "worker_url": "Worker URL / IP (optional)"
+          "worker_url": "Worker URL (optional; blank = auto)"
         }
       }
     },
@@ -83,7 +83,7 @@
         "description": "Account: {email}\n\nLeave password blank to keep the current one.\n\n{hint}",
         "data": {
           "password": "Password (leave blank to keep)",
-          "worker_url": "Worker URL / IP (optional)"
+          "worker_url": "Worker URL (optional; blank = auto)"
         }
       },
       "mfa": {
