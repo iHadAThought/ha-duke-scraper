@@ -106,9 +106,11 @@
     "mfa_required": {
       "title": "Duke Energy MFA required ({email})",
       "fix_flow": {
-        "start_reauth": {
-          "title": "Reauthenticate Duke Energy",
-          "description": "The Duke Energy web session expired or passkey/MFA failed for {email}. Continue to open reauthentication and enter a new email code.\n\nDetail: {detail}"
+        "step": {
+          "start_reauth": {
+            "title": "Reauthenticate Duke Energy",
+            "description": "The Duke Energy web session expired or passkey/MFA failed for {email}. Continue to open reauthentication and enter a new email code.\n\nDetail: {detail}"
+          }
         }
       }
     }
