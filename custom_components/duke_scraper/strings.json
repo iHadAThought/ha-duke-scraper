@@ -101,5 +101,17 @@
       "mfa_request_failed": "Could not send MFA code: {hint}",
       "invalid_mfa_code": "Invalid or expired MFA code: {hint}"
     }
+  },
+  "issues": {
+    "mfa_required": {
+      "title": "Duke Energy MFA required ({email})",
+      "description": "The Duke Energy web session expired or passkey/MFA failed for {email}. Use **Fix** to open reauthentication, request a new email code, and resume usage downloads.\n\nDetail: {detail}"
+    }
+  },
+  "repairs": {
+    "start_reauth": {
+      "title": "Reauthenticate Duke Energy",
+      "description": "This opens the Duke Energy reauthentication flow so you can request and enter a new MFA code from email."
+    }
   }
 }

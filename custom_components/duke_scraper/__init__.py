@@ -7,6 +7,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from .const import default_options
 from .coordinator import DukeScraperCoordinator
@@ -35,6 +36,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DukeScraperConfigEntry) 
     async def _initial_refresh() -> None:
         try:
             await coordinator.async_refresh()
+        except ConfigEntryAuthFailed:
+            # Repair + reauth already raised from the coordinator MFA handler.
+            _LOGGER.warning("Duke scraper initial refresh needs reauthentication")
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Duke scraper initial refresh failed")
 

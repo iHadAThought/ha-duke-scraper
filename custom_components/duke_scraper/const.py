@@ -70,6 +70,7 @@ STORAGE_STATE_NAME = "storage_state.json"
 BACKFILL_DONE_KEY = "backfill_done"
 WEB_MFA_OK_KEY = "web_mfa_ok"
 NOTIFICATION_MFA_ID = "duke_scraper_mfa_required"
+ISSUE_MFA_REQUIRED = "mfa_required"
 
 
 def default_options() -> dict:

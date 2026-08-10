@@ -22,6 +22,8 @@ from homeassistant.components.recorder.statistics import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -45,6 +47,7 @@ from .const import (
     DEFAULT_UPDATE_MINUTES,
     DEFAULT_USE_PASSKEY,
     DOMAIN,
+    ISSUE_MFA_REQUIRED,
     LOOKBACK_DAYS,
     NOTIFICATION_MFA_ID,
     WEB_MFA_OK_KEY,
@@ -134,6 +137,8 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
         try:
             try:
                 usage = await self._async_fetch_usage()
+            except ConfigEntryAuthFailed:
+                raise
             except Exception as err:
                 raise UpdateFailed(str(err)) from err
 
@@ -222,7 +227,6 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
                 await self._async_handle_mfa_required(
                     body.get("error") or "Duke web MFA required"
                 )
-                raise UpdateFailed(body.get("error") or "MFA required")
             if resp.status != 200 or not body.get("ok"):
                 err = body.get("error") or f"Worker HTTP {resp.status}"
                 if "mfa" in err.lower() or "web session" in err.lower():
@@ -260,34 +264,68 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
         return rows
 
     async def _async_handle_mfa_required(self, detail: str) -> None:
-        """Notify user and open reauth so they can request/enter a new MFA code."""
+        """Surface MFA failure via Repair + notification, then start reauth.
+
+        Always recreates alerts (even when web_mfa_ok is already False) so
+        Settings → System → Repairs stays visible after ignored/dismissed state.
+        Raises ConfigEntryAuthFailed so the coordinator marks auth failed.
+        """
         _LOGGER.warning("Duke scraper MFA required: %s", detail)
-        already_flagged = self.entry.data.get(WEB_MFA_OK_KEY) is False
-        if not already_flagged:
+        if self.entry.data.get(WEB_MFA_OK_KEY) is not False:
             self.hass.config_entries.async_update_entry(
                 self.entry,
                 data={**self.entry.data, WEB_MFA_OK_KEY: False},
             )
-            await self.hass.services.async_call(
-                "persistent_notification",
-                "create",
-                {
-                    "notification_id": NOTIFICATION_MFA_ID,
-                    "title": "Duke Energy MFA required",
-                    "message": (
-                        "The Duke Energy web session expired (usually after ~30 days). "
-                        "Open **Settings → Devices & services → Duke Energy Scraper → "
-                        "Configure** (or Reauthenticate) to request a new email code "
-                        "and resume usage downloads.\n\n"
-                        f"Detail: {detail}"
-                    ),
-                },
-                blocking=False,
-            )
-            self.entry.async_start_reauth(self.hass)
+
+        email = str(self.entry.data.get(CONF_EMAIL) or "unknown")
+        detail_short = (detail or "MFA required")[:240]
+        # Delete first so a previously ignored issue resurfaces.
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_MFA_REQUIRED)
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_MFA_REQUIRED,
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=ISSUE_MFA_REQUIRED,
+            translation_placeholders={
+                "email": email,
+                "detail": detail_short,
+            },
+            data={"entry_id": self.entry.entry_id},
+        )
+        await self.hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "notification_id": NOTIFICATION_MFA_ID,
+                "title": "Duke Energy MFA required",
+                "message": (
+                    "The Duke Energy web session expired or passkey/MFA failed. "
+                    "Open **Settings → System → Repairs**, or "
+                    "**Settings → Devices & services → Duke Energy Scraper**, "
+                    "to reauthenticate and enter a new email code.\n\n"
+                    f"Detail: {detail_short}"
+                ),
+            },
+            blocking=False,
+        )
+        self.entry.async_start_reauth(self.hass)
+        raise ConfigEntryAuthFailed(detail_short) from None
 
     async def _async_insert_statistics(self, usage: dict[datetime, float]) -> None:
-        """Write sum-increasing external statistics for Energy dashboard."""
+        """Write sum-increasing external statistics for Energy dashboard.
+
+        Home Assistant external statistics require hour-aligned timestamps, so
+        any finer-grained readings (e.g. 15-minute) are summed into hours first.
+        """
+        hourly: dict[datetime, float] = {}
+        for stamp, kwh in usage.items():
+            hour = stamp.replace(minute=0, second=0, microsecond=0)
+            hourly[hour] = hourly.get(hour, 0.0) + float(kwh)
+        usage = hourly
+
         consumption_statistic_id = self.statistic_id
         self._statistic_ids.add(consumption_statistic_id)
 
@@ -297,7 +335,7 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
             1,
             consumption_statistic_id,
             True,  # noqa: FBT003
-            set(),
+            {"sum"},
         )
 
         if not last_stat:
@@ -325,10 +363,9 @@ class DukeScraperCoordinator(DataUpdateCoordinator[dict[str, Any] | None]):
                 )
                 last_stats_time = stats[consumption_statistic_id][0]["start"]
             else:
-                consumption_sum = cast(
-                    "float", last_stat[consumption_statistic_id][0]["sum"]
-                )
-                last_stats_time = last_stat[consumption_statistic_id][0]["start"]
+                last_row = last_stat[consumption_statistic_id][0]
+                consumption_sum = cast("float", last_row.get("sum") or 0.0)
+                last_stats_time = last_row["start"]
 
         consumption_statistics: list[StatisticData] = []
         for start in sorted(usage.keys()):

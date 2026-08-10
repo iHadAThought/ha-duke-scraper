@@ -350,7 +350,7 @@ If you prefer not to do any of this, leave **Use worker passkey** off and comple
 
 ### MFA required
 
-HA shows a persistent notification when the web session expires. **Configure / Reauthenticate** → Request code → OTP.
+HA opens a **Repair** under Settings → System → Repairs (and a persistent notification) when the web session expires or passkey/MFA fails. Use **Fix** / **Reauthenticate** → Request code → OTP. Alerts clear after a successful MFA.
 
 ### Empty 15-minute export
 

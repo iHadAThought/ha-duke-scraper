@@ -32,12 +32,12 @@ from .const import (
     DEFAULT_USE_PASSKEY,
     DOMAIN,
     INTERVAL_CHOICES,
-    NOTIFICATION_MFA_ID,
     UPDATE_MINUTE_CHOICES,
     WEB_MFA_OK_KEY,
     default_options,
     option,
 )
+from .repairs import clear_mfa_alerts
 from .worker_url import (
     async_probe_worker,
     normalize_worker_base,
@@ -391,13 +391,7 @@ class DukeScraperConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         options = {**default_options(), **self._options}
         if web_mfa_ok:
-            self.hass.async_create_task(
-                self.hass.services.async_call(
-                    "persistent_notification",
-                    "dismiss",
-                    {"notification_id": NOTIFICATION_MFA_ID},
-                )
-            )
+            clear_mfa_alerts(self.hass)
         if self._reauth_entry:
             return self.async_update_reload_and_abort(
                 self._reauth_entry,
@@ -664,6 +658,7 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
                             entry,
                             data={**entry.data, WEB_MFA_OK_KEY: True},
                         )
+                        clear_mfa_alerts(self.hass)
                         return self.async_create_entry(
                             title="",
                             data={**default_options(), **(entry.options or {})},
@@ -684,13 +679,7 @@ class DukeScraperOptionsFlow(config_entries.OptionsFlow):
                         entry,
                         data={**entry.data, WEB_MFA_OK_KEY: True},
                     )
-                    self.hass.async_create_task(
-                        self.hass.services.async_call(
-                            "persistent_notification",
-                            "dismiss",
-                            {"notification_id": NOTIFICATION_MFA_ID},
-                        )
-                    )
+                    clear_mfa_alerts(self.hass)
                     return self.async_create_entry(
                         title="",
                         data={**default_options(), **(entry.options or {})},
