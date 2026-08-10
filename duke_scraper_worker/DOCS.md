@@ -26,5 +26,5 @@ Playwright Chromium worker used by the **Duke Energy Scraper** integration
 ## Notes
 
 - Supported architectures: **amd64**, **aarch64** (Playwright image)
-- Installs from GHCR (`ghcr.io/ihadathought/{arch}-duke-scraper-worker`); first pull can take several minutes
+- Installs from GHCR (`ghcr.io/ihadathought/ha-duke-scraper/{arch}-duke-scraper-worker`); first pull can take several minutes
 - HACS does **not** install this add-on; both pieces are required on HAOS

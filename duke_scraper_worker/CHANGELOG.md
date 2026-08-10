@@ -1,5 +1,11 @@
 # Changelog — Duke Energy Scraper Worker add-on
 
+## 1.0.2
+
+- GHCR images moved to repo-linked paths so GitHub Actions can publish with `GITHUB_TOKEN`:
+  `ghcr.io/ihadathought/ha-duke-scraper/{amd64|aarch64}-duke-scraper-worker`
+- Fixes `permission_denied: write_package` on the old user-root package names
+
 ## 1.0.1
 
 - Worker publishes `worker_url` on every start (IP or advertise host) so HA survives hassio IP drift

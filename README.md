@@ -85,12 +85,12 @@ Do this **before** (or right after) adding the integration.
 4. Wait until the add-on log shows Playwright ready / listening on `8765` (image pulls from GHCR; first pull is large)
 5. The add-on writes `/config/.duke_scraper/worker_url` automatically — leave **Worker URL** blank in the integration, or paste the URL from that file
 
-Pre-built images: `ghcr.io/ihadathought/{amd64|aarch64}-duke-scraper-worker` ([v1.0.1 release](https://github.com/iHadAThought/ha-duke-scraper/releases/tag/v1.0.1)).
+Pre-built images: `ghcr.io/ihadathought/ha-duke-scraper/{amd64|aarch64}-duke-scraper-worker` ([v1.0.2](https://github.com/iHadAThought/ha-duke-scraper/releases/tag/v1.0.2)).
 
 **One-time (required for HAOS pulls):** make both GHCR packages **Public**:
 
-- [amd64-duke-scraper-worker](https://github.com/users/iHadAThought/packages/container/package/amd64-duke-scraper-worker) → Package settings → Change visibility → Public  
-- [aarch64-duke-scraper-worker](https://github.com/users/iHadAThought/packages/container/package/aarch64-duke-scraper-worker) → same
+- [amd64-duke-scraper-worker](https://github.com/users/iHadAThought/packages/container/package/ha-duke-scraper%2Famd64-duke-scraper-worker) → Package settings → Change visibility → Public  
+- [aarch64-duke-scraper-worker](https://github.com/users/iHadAThought/packages/container/package/ha-duke-scraper%2Faarch64-duke-scraper-worker) → same
 
 Supported architectures: **amd64**, **aarch64**.
 

@@ -15,10 +15,17 @@ permissions:
   packages: write
 
 env:
-  IMAGE_BASE: ghcr.io/ihadathought
+  # Repo-linked package path so GITHUB_TOKEN can publish (user-root packages
+  # like ghcr.io/owner/name often deny Actions writes unless Actions access is
+  # granted on each package).
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ihadathought/ha-duke-scraper
 
 jobs:
   build:
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +46,7 @@ jobs:
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -57,6 +64,7 @@ jobs:
           PY
           )
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.arch }}-duke-scraper-worker"
           echo "Building ${{ matrix.arch }} version ${VERSION}"
 
       - name: Build and push
@@ -68,8 +76,8 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ env.IMAGE_BASE }}/${{ matrix.arch }}-duke-scraper-worker:${{ steps.meta.outputs.version }}
-            ${{ env.IMAGE_BASE }}/${{ matrix.arch }}-duke-scraper-worker:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.arch }}-duke-scraper-worker:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.arch }}-duke-scraper-worker:latest
           labels: |
             org.opencontainers.image.title=Duke Energy Scraper Worker
             org.opencontainers.image.source=https://github.com/iHadAThought/ha-duke-scraper
@@ -81,7 +89,8 @@ jobs:
       - name: Make package public
         continue-on-error: true
         env:
-          PACKAGE: ${{ matrix.arch }}-duke-scraper-worker
+          # Nested package names are URL-encoded with %2F for the API.
+          PACKAGE: ha-duke-scraper%2F${{ matrix.arch }}-duke-scraper-worker
         run: |
           set -euo pipefail
           code=$(curl -sS -o /tmp/vis.json -w "%{http_code}" -X PUT \
@@ -93,7 +102,7 @@ jobs:
           echo "visibility HTTP ${code}"
           cat /tmp/vis.json || true
           if [[ "$code" != "204" && "$code" != "200" ]]; then
-            echo "::warning::Could not auto-set ${PACKAGE} public (GITHUB_TOKEN limitation)."
-            echo "One-time manual step: Package settings → Change visibility → Public"
+            echo "::warning::Could not auto-set package public."
+            echo "Manual: Package settings → Change visibility → Public"
             echo "https://github.com/users/${{ github.repository_owner }}/packages/container/package/${PACKAGE}"
           fi
