@@ -20,7 +20,7 @@ LABEL \
   io.hass.name="Duke Energy Scraper Worker" \
   io.hass.description="Playwright worker for Duke Energy Scraper" \
   io.hass.type="addon" \
-  io.hass.version="1.0.2" \
+  io.hass.version="1.0.3" \
   io.hass.arch="aarch64|amd64"
 
 EXPOSE 8765

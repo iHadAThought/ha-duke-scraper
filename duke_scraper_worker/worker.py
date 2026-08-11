@@ -305,61 +305,15 @@ def _playwright_login(email: str, password: str) -> dict[str, Any]:
                 pass
 
         def _click_primary() -> None:
-            """Click Auth0's visible primary button (skip ulp-hidden-form-submit-button)."""
-            candidates = [
-                "button[data-action-button-primary]:visible",
-                "button._button-login-id:visible",
-                "button[name='action'][value='default']:visible",
-                "button:has-text('Continue'):visible",
-                "button:has-text('Next'):visible",
-                "button:has-text('Sign In'):visible",
-                "button:has-text('Log In'):visible",
-                "button[type='submit']:visible",
-            ]
-            for sel in candidates:
-                try:
-                    loc = page.locator(sel).first
-                    if not loc.count():
-                        continue
-                    # Skip Auth0's aria-hidden decoy submit
-                    hidden = loc.get_attribute("aria-hidden")
-                    cls = loc.get_attribute("class") or ""
-                    if hidden == "true" or "ulp-hidden-form-submit" in cls:
-                        continue
-                    if loc.is_visible(timeout=500):
-                        loc.click(timeout=8000, no_wait_after=False)
-                        return
-                except Exception:
-                    continue
-            # Fallback: submit the focused field with Enter
-            page.keyboard.press("Enter")
+            _click_visible_primary(page)
 
-        # Step 1: email / username
-        user = page.locator(
-            "input#username, input[name='username'], input[type='email']"
-        ).first
-        user.wait_for(state="visible", timeout=20000)
-        user.click(timeout=5000)
-        user.fill(email, timeout=10000)
-        LOG.info("Filled username")
-        _click_primary()
-        page.wait_for_timeout(2000)
-
-        # Step 2: password
-        pwd = page.locator("input[type='password']").first
+        # Step 1–2: email / username then password (skip Auth0 honeypot)
+        _fill_identifier(page, email)
         try:
-            pwd.wait_for(state="visible", timeout=20000)
-        except Exception as err:
-            # CAPTCHA / passkey / error screen
-            body = ""
-            try:
-                body = page.locator("body").inner_text(timeout=2000)[:400]
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"Password field not shown (CAPTCHA/MFA?). url={page.url} body≈{body!r}"
-            ) from err
-
+            page.wait_for_url("**/u/login/password**", timeout=8000)
+        except Exception:
+            pass
+        pwd = _wait_for_password_field(page, timeout_ms=20000)
         pwd.click(timeout=5000)
         pwd.fill(password, timeout=10000)
         LOG.info("Filled password")
@@ -627,10 +581,15 @@ def _hourly_for_range(
 
 
 def _click_visible_primary(page) -> None:
+    """Click Auth0's visible primary button (skip ulp-hidden-form-submit-button)."""
     for sel in (
         "button[data-action-button-primary]:visible",
+        "button._button-login-id:visible",
+        "button[name='action'][value='default']:visible",
         "button:has-text('Continue'):visible",
+        "button:has-text('Next'):visible",
         "button:has-text('Sign In'):visible",
+        "button:has-text('Log In'):visible",
         "button[type='submit']:visible",
     ):
         try:
@@ -646,6 +605,83 @@ def _click_visible_primary(page) -> None:
         except Exception:
             continue
     page.keyboard.press("Enter")
+
+
+# Auth0 ULP keeps a honeypot <input type="password" hidden class="hide"> on the
+# identifier page. Never use bare input[type='password'].first — it latches onto
+# that field and wait_for(visible) times out while still on /u/login/identifier.
+_USERNAME_SEL = "input#username, input[name='username'], input[type='email']"
+_PASSWORD_VISIBLE_SEL = (
+    "input[name='password']:visible, "
+    "input#password:visible, "
+    "input[type='password']:visible"
+)
+
+
+def _page_snippet(page, n: int = 400) -> str:
+    try:
+        return page.locator("body").inner_text(timeout=2000)[:n]
+    except Exception:
+        return ""
+
+
+def _username_input(page):
+    return page.locator(_USERNAME_SEL).first
+
+
+def _visible_password_input(page):
+    return page.locator(_PASSWORD_VISIBLE_SEL).first
+
+
+def _fill_identifier(page, email: str) -> None:
+    user = _username_input(page)
+    user.wait_for(state="visible", timeout=30000)
+    user.click(timeout=5000)
+    user.fill(email, timeout=10000)
+    LOG.info("Filled username")
+    _click_visible_primary(page)
+
+
+def _wait_for_password_field(page, *, timeout_ms: int = 30000):
+    """Wait for the real Auth0 password field (not the identifier honeypot)."""
+    pwd = _visible_password_input(page)
+    deadline = datetime.now(timezone.utc) + timedelta(milliseconds=timeout_ms)
+    retried_continue = False
+    while datetime.now(timezone.utc) < deadline:
+        try:
+            if pwd.count() and pwd.is_visible(timeout=400):
+                return pwd
+        except Exception:
+            pass
+
+        url = (page.url or "").lower()
+        if "/u/login/password" in url:
+            page.wait_for_timeout(400)
+            continue
+
+        # Continue sometimes no-ops on identifier; retry the primary button once.
+        if not retried_continue and (
+            "/u/login/identifier" in url
+            or (_username_input(page).count() and not pwd.count())
+        ):
+            LOG.info(
+                "Still on identifier after Continue (url=%s); retrying primary click",
+                page.url,
+            )
+            _click_visible_primary(page)
+            retried_continue = True
+            try:
+                page.wait_for_url("**/u/login/password**", timeout=10000)
+            except Exception:
+                pass
+            continue
+
+        page.wait_for_timeout(400)
+
+    raise RuntimeError(
+        f"Password field not shown (CAPTCHA/MFA?). url={page.url} "
+        f"body≈{_page_snippet(page)!r}"
+    )
 
 
 def _new_browser_context(pw, storage_state: str | None = None):
@@ -829,16 +865,11 @@ def _try_click_passkey_continue(page) -> bool:
 
 
 def _fill_email_password(page, email: str, password: str) -> None:
-    user = page.locator(
-        "input#username, input[name='username'], input[type='email']"
-    ).first
-    user.wait_for(state="visible", timeout=30000)
-    user.fill(email)
-    _click_visible_primary(page)
-    page.wait_for_timeout(2000)
-    pwd = page.locator("input[type='password']").first
-    pwd.wait_for(state="visible", timeout=30000)
-    pwd.fill(password)
+    _fill_identifier(page, email)
+    pwd = _wait_for_password_field(page, timeout_ms=30000)
+    pwd.click(timeout=5000)
+    pwd.fill(password, timeout=10000)
+    LOG.info("Filled password")
     _click_visible_primary(page)
     page.wait_for_timeout(6000)
 
@@ -1062,13 +1093,10 @@ def _refresh_web_session(
 
             # Identifier step first (passkey CTA often appears only after email)
             try:
-                user = page.locator(
-                    "input#username, input[name='username'], input[type='email']"
-                ).first
+                user = _username_input(page)
                 if user.count() and user.is_visible(timeout=1500):
-                    user.fill(email)
-                    _click_visible_primary(page)
-                    page.wait_for_timeout(2500)
+                    _fill_identifier(page, email)
+                    page.wait_for_timeout(1500)
             except Exception:
                 pass
 
@@ -1096,14 +1124,13 @@ def _refresh_web_session(
                 LOG.info("Passkey login did not land on dashboard; trying password")
 
             # Password path (often succeeds without MFA on this tenant)
-            if page.locator("input[type='password']").count():
-                page.locator("input[type='password']").first.fill(password)
+            if _visible_password_input(page).count():
+                pwd = _visible_password_input(page)
+                pwd.fill(password)
                 _click_visible_primary(page)
                 page.wait_for_timeout(6000)
                 _await_logged_in(page, timeout_ms=30000)
-            elif page.locator(
-                "input#username, input[name='username'], input[type='email']"
-            ).count():
+            elif _username_input(page).count():
                 _fill_email_password(page, email, password)
                 _await_logged_in(page, timeout_ms=30000)
 
@@ -1376,16 +1403,15 @@ class _MfaSessionManager:
             except Exception:
                 pass
 
-        user = page.locator(
-            "input#username, input[name='username'], input[type='email']"
-        ).first
-        user.wait_for(state="visible", timeout=30000)
-        user.fill(email)
-        _click_visible_primary(page)
-        page.wait_for_timeout(2000)
-        pwd = page.locator("input[type='password']").first
-        pwd.wait_for(state="visible", timeout=30000)
-        pwd.fill(password)
+        _fill_identifier(page, email)
+        try:
+            page.wait_for_url("**/u/login/password**", timeout=8000)
+        except Exception:
+            pass
+        pwd = _wait_for_password_field(page, timeout_ms=30000)
+        pwd.click(timeout=5000)
+        pwd.fill(password, timeout=10000)
+        LOG.info("Filled password")
         _click_visible_primary(page)
         page.wait_for_timeout(5000)
 

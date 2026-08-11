@@ -1,5 +1,10 @@
 # Changelog — Duke Energy Scraper Worker add-on
 
+## 1.0.3
+
+- Fix MFA / login hang on Auth0 identifier page: ignore honeypot
+  `input[type=password]` and wait for a visible password field (or retry Continue)
+
 ## 1.0.2
 
 - GHCR images moved to repo-linked paths so GitHub Actions can publish with `GITHUB_TOKEN`:
