@@ -625,6 +625,41 @@ def _page_snippet(page, n: int = 400) -> str:
         return ""
 
 
+def _on_duke_login_error(page) -> bool:
+    """Auth0 sometimes lands on 'Something went wrong / Sign In' instead of password."""
+    text = _page_snippet(page, 500).lower()
+    return "something went wrong" in text and (
+        "try signing in again" in text or "sign in" in text
+    )
+
+
+def _recover_duke_login_error(page) -> bool:
+    """Click Sign In on Duke's Auth0 error interstitial; return True if clicked."""
+    if not _on_duke_login_error(page):
+        return False
+    LOG.warning("Duke Auth0 error page detected; clicking Sign In to recover")
+    for sel in (
+        "a:has-text('Sign In'):visible",
+        "button:has-text('Sign In'):visible",
+        "a[href*='login']:visible",
+        "button:has-text('Try again'):visible",
+    ):
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible(timeout=800):
+                loc.click(timeout=8000)
+                page.wait_for_timeout(2500)
+                return True
+        except Exception:
+            continue
+    try:
+        page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(2000)
+        return True
+    except Exception:
+        return False
+
+
 def _username_input(page):
     return page.locator(_USERNAME_SEL).first
 
@@ -634,6 +669,7 @@ def _visible_password_input(page):
 
 
 def _fill_identifier(page, email: str) -> None:
+    _recover_duke_login_error(page)
     user = _username_input(page)
     user.wait_for(state="visible", timeout=30000)
     user.click(timeout=5000)
@@ -647,12 +683,19 @@ def _wait_for_password_field(page, *, timeout_ms: int = 30000):
     pwd = _visible_password_input(page)
     deadline = datetime.now(timezone.utc) + timedelta(milliseconds=timeout_ms)
     retried_continue = False
+    recovered_error = False
     while datetime.now(timezone.utc) < deadline:
         try:
             if pwd.count() and pwd.is_visible(timeout=400):
                 return pwd
         except Exception:
             pass
+
+        if not recovered_error and _on_duke_login_error(page):
+            if _recover_duke_login_error(page):
+                recovered_error = True
+                retried_continue = False
+                continue
 
         url = (page.url or "").lower()
         if "/u/login/password" in url:
@@ -678,9 +721,16 @@ def _wait_for_password_field(page, *, timeout_ms: int = 30000):
 
         page.wait_for_timeout(400)
 
+    snippet = _page_snippet(page)
+    if _on_duke_login_error(page) or "something went wrong" in snippet.lower():
+        raise RuntimeError(
+            "Duke login page failed with 'Something went wrong'. "
+            "Wait a minute and try Request code again "
+            f"(url={page.url}). body≈{snippet!r}"
+        )
     raise RuntimeError(
         f"Password field not shown (CAPTCHA/MFA?). url={page.url} "
-        f"body≈{_page_snippet(page)!r}"
+        f"body≈{snippet!r}"
     )
 
 
@@ -1074,20 +1124,71 @@ def _login_still_blocked(page) -> bool:
     return False
 
 
+def _cookies_still_logged_in(page) -> bool:
+    """True if saved cookies already land us on My Account (dashboard or usage)."""
+    if _page_looks_logged_in(page):
+        return True
+    url = page.url.lower()
+    if "login" in url or "login.duke-energy.com" in url:
+        return False
+    if "duke-energy.com/my-account" not in url:
+        return False
+    try:
+        if page.locator("text=Sign Out").first.is_visible(timeout=2000):
+            return True
+    except Exception:
+        pass
+    try:
+        if page.locator("text=Download My Data").first.is_visible(timeout=2000):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _refresh_web_session(
     email: str, password: str, *, use_passkey: bool = True
 ) -> dict[str, Any]:
-    """Silently rebuild web_storage_state via passkey and/or password login.
+    """Silently rebuild web_storage_state via saved cookies, passkey, and/or password.
+
+    Always tries existing WEB_STATE first so a flaky validity check does not force
+    a blank-browser re-login (and MFA) when cookies are still good.
 
     Returns status dict. Raises MfaRequiredError only when interactive MFA is needed.
     """
     with sync_playwright() as pw:
-        browser, context = _new_browser_context(pw)
+        storage = str(WEB_STATE_PATH) if WEB_STATE_PATH.exists() else None
+        browser, context = _new_browser_context(pw, storage)
         page = context.new_page()
         cdp, authenticator_id = _attach_virtual_authenticator(
             context, page, seed=use_passkey and _passkey_enrolled()
         )
         try:
+            # 1) Reuse saved cookies when present
+            if storage:
+                LOG.info("Silent refresh: trying saved web storage state")
+                for url in (WEB_DASHBOARD_URL, WEB_USAGE_URL):
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                        page.wait_for_timeout(3000)
+                    except Exception as err:
+                        LOG.warning("Saved-session goto %s failed: %s", url, err)
+                        continue
+                    if _cookies_still_logged_in(page) or _await_logged_in(
+                        page, timeout_ms=15000
+                    ):
+                        context.storage_state(path=str(WEB_STATE_PATH))
+                        LOG.info("Web session restored from saved cookies (%s)", url)
+                        return {
+                            "ok": True,
+                            "status": "cookies_restored",
+                            "web_state": True,
+                            "passkey_enrolled": _passkey_enrolled(),
+                        }
+                LOG.info(
+                    "Saved cookies did not restore My Account; trying passkey/password"
+                )
+
             page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=90000)
             page.wait_for_timeout(2500)
 
@@ -1360,7 +1461,8 @@ class _MfaSessionManager:
         self._use_passkey = bool(use_passkey)
         LOG.info("MFA start for %s (use_passkey=%s)", email, self._use_passkey)
         self._pw = sync_playwright().start()
-        self._browser, self._context = _new_browser_context(self._pw)
+        storage = str(WEB_STATE_PATH) if WEB_STATE_PATH.exists() else None
+        self._browser, self._context = _new_browser_context(self._pw, storage)
         page = self._context.new_page()
         self._page = page
         self._cdp, self._authenticator_id = _attach_virtual_authenticator(
@@ -1371,14 +1473,29 @@ class _MfaSessionManager:
 
         page.goto(WEB_DASHBOARD_URL, wait_until="domcontentloaded", timeout=90000)
         page.wait_for_timeout(2000)
+        _recover_duke_login_error(page)
 
-        # Prefer passkey if enrolled and enabled
+        # Saved cookies may already be enough
+        if storage and (
+            _cookies_still_logged_in(page)
+            or _await_logged_in(page, timeout_ms=12000)
+        ):
+            self._context.storage_state(path=str(WEB_STATE_PATH))
+            self._close_unlocked()
+            return {
+                "ok": True,
+                "status": "already_authenticated",
+                "web_state": True,
+                "passkey_enrolled": _passkey_enrolled(),
+            }
+
+        # Prefer passkey before filling email when the CTA is already visible
         if (
             self._use_passkey
             and _passkey_enrolled()
             and _try_click_passkey_continue(page)
         ):
-            if _page_looks_logged_in(page):
+            if _page_looks_logged_in(page) or _await_logged_in(page):
                 self._context.storage_state(path=str(WEB_STATE_PATH))
                 self._close_unlocked()
                 return {
@@ -1388,7 +1505,7 @@ class _MfaSessionManager:
                     "passkey_enrolled": True,
                 }
 
-        # Already signed in via saved cookies in a fresh context? (no storage loaded)
+        # Already signed in?
         if "dashboard" in page.url and "login" not in page.url.lower():
             try:
                 if page.locator("text=Sign Out").first.is_visible(timeout=2000):
@@ -1404,16 +1521,48 @@ class _MfaSessionManager:
                 pass
 
         _fill_identifier(page, email)
+        page.wait_for_timeout(1500)
+        _recover_duke_login_error(page)
+
+        # Passkey CTA often appears only after email — try before password
+        if self._use_passkey and _passkey_enrolled():
+            LOG.info("MFA start: trying Continue with Passkey after identifier")
+            if _try_click_passkey_continue(page) and (
+                _page_looks_logged_in(page) or _await_logged_in(page)
+            ):
+                self._context.storage_state(path=str(WEB_STATE_PATH))
+                self._close_unlocked()
+                return {
+                    "ok": True,
+                    "status": "already_authenticated",
+                    "web_state": True,
+                    "passkey_enrolled": True,
+                }
+
         try:
             page.wait_for_url("**/u/login/password**", timeout=8000)
         except Exception:
             pass
-        pwd = _wait_for_password_field(page, timeout_ms=30000)
+
+        # If Duke error page persists, recover then re-enter email once
+        if _on_duke_login_error(page):
+            _recover_duke_login_error(page)
+            if _username_input(page).count():
+                _fill_identifier(page, email)
+                page.wait_for_timeout(1500)
+
+        try:
+            pwd = _wait_for_password_field(page, timeout_ms=30000)
+        except RuntimeError as err:
+            self._close_unlocked()
+            raise RuntimeError(str(err)) from err
+
         pwd.click(timeout=5000)
         pwd.fill(password, timeout=10000)
         LOG.info("Filled password")
         _click_visible_primary(page)
         page.wait_for_timeout(5000)
+        _recover_duke_login_error(page)
 
         # No MFA — dashboard, or passkey enrollment after password
         if _on_passkey_enrollment(page):
@@ -1587,16 +1736,27 @@ def _web_session_valid() -> bool:
         browser, context = _new_browser_context(pw, str(WEB_STATE_PATH))
         page = context.new_page()
         try:
-            page.goto(WEB_USAGE_URL, wait_until="domcontentloaded", timeout=90000)
-            page.wait_for_timeout(4000)
-            ok = "usage" in page.url and "login" not in page.url.lower()
-            try:
-                ok = ok and page.locator("text=Download My Data").first.is_visible(
-                    timeout=5000
-                )
-            except Exception:
-                ok = False
-            return bool(ok)
+            # Prefer usage (Download My Data), fall back to dashboard Sign Out.
+            for url, marker in (
+                (WEB_USAGE_URL, "Download My Data"),
+                (WEB_DASHBOARD_URL, "Sign Out"),
+            ):
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                    page.wait_for_timeout(4000)
+                except Exception as err:
+                    LOG.warning("web_session_valid goto %s failed: %s", url, err)
+                    continue
+                if "login" in page.url.lower() or "login.duke-energy.com" in page.url.lower():
+                    continue
+                try:
+                    if page.locator(f"text={marker}").first.is_visible(timeout=5000):
+                        return True
+                except Exception:
+                    pass
+                if _cookies_still_logged_in(page):
+                    return True
+            return False
         finally:
             browser.close()
 

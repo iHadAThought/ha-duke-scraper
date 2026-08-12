@@ -1,5 +1,11 @@
 # Changelog — Duke Energy Scraper Worker add-on
 
+## 1.0.4
+
+- Silent session refresh now loads saved `web_storage_state` cookies first before
+  trying passkey/password, so a flaky validity check no longer forces MFA
+- Session validity also accepts dashboard Sign Out (not only Download My Data)
+
 ## 1.0.3
 
 - Fix MFA / login hang on Auth0 identifier page: ignore honeypot
